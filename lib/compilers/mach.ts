@@ -54,7 +54,7 @@ export type MachTarget = {
  *
  *   mach.toml               generated; one bin artifact, every supported target, std as a path dependency
  *   src/example.mach        the user's source (and any extra files, rooted at src/)
- *   dep/std/                realized by `mach dep pull` from the installed std named by `stdPath`
+ *   dep/std/                realized by `mach dep pull` from the std installed beside the compiler, or `stdPath`
  *   out/obj/example/*.o     per-module objects, disassembled with objdump against their DWARF line table
  *   out/bin/example         the linked executable
  */
@@ -67,7 +67,10 @@ export class MachCompiler extends BaseCompiler {
 
     constructor(info: PreliminaryCompilerInfo, env: CompilationEnvironment) {
         super(info, env);
-        this.stdPath = this.compilerProps<string>(`compiler.${this.compiler.id}.stdPath`);
+        // each installed compiler carries the std it was released with in <install>/std
+        this.stdPath =
+            this.compilerProps<string>(`compiler.${this.compiler.id}.stdPath`) ??
+            path.join(path.dirname(this.compiler.exe), 'std');
         this.compiler.supportsTarget = true;
     }
 
@@ -141,7 +144,6 @@ export class MachCompiler extends BaseCompiler {
 
     protected override async writeAllFiles(dirPath: string, source: string, files: FiledataPair[]) {
         if (!source) throw new Error(`File ${this.compileFilename} has no content or file is missing`);
-        if (!this.stdPath) throw new Error(`compiler.${this.compiler.id}.stdPath is not configured`);
 
         const srcDir = path.join(dirPath, 'src');
         await fs.mkdir(srcDir, {recursive: true});

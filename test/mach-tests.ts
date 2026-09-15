@@ -47,8 +47,11 @@ describe('Mach project layout', () => {
     let compiler: MachCompiler;
 
     beforeAll(() => {
-        ce = makeCompilationEnvironment({languages, props: {'compiler.mach.stdPath': '/opt/mach-std'}});
-        compiler = new MachCompiler(makeFakeCompilerInfo({id: 'mach', exe: '/dev/null', lang: 'mach'}), ce);
+        ce = makeCompilationEnvironment({languages});
+        compiler = new MachCompiler(
+            makeFakeCompilerInfo({id: 'mach', exe: '/opt/compiler-explorer/mach-5.0.4/mach', lang: 'mach'}),
+            ce,
+        );
         vi.spyOn(compiler, 'execCompilerCached').mockResolvedValue({
             code: 0,
             stdout: infoTargets,
@@ -65,14 +68,14 @@ describe('Mach project layout', () => {
         ]);
     });
 
-    it('declares every target, the source entry and std as a path dependency', async () => {
+    it('declares every target, the source entry and the bundled std as a path dependency', async () => {
         const manifest = compiler.manifest(await compiler.targets());
         expect(manifest).toContain('[target.linux-riscv64-lp64d]\nisa = "rv64gc"\nos = "linux"\nabi = "lp64d"\n');
         expect(manifest).toContain('[artifact.example]\nkind = "bin"\nentry = "example.mach"\n');
         expect(manifest).toContain(
             'targets = ["linux-x86_64", "linux-riscv64-lp64", "linux-riscv64-lp64d", "freestanding-x86_64"]',
         );
-        expect(manifest).toContain('[dep.std]\npath = "/opt/mach-std"\n');
+        expect(manifest).toContain('[dep.std]\npath = "/opt/compiler-explorer/mach-5.0.4/std"\n');
     });
 
     it('builds the project root and disassembles the module object', () => {
@@ -89,5 +92,11 @@ describe('Mach project layout', () => {
             path.join(root, 'out', 'obj', 'example', 'example.o'),
         );
         expect(compiler.getExecutableFilename(root, 'output')).toEqual(path.join(root, 'out', 'bin', 'example'));
+    });
+
+    it('takes std from stdPath when a compiler names one', () => {
+        const env = makeCompilationEnvironment({languages, props: {'compiler.machdev.stdPath': '/src/mach/dep/std'}});
+        const dev = new MachCompiler(makeFakeCompilerInfo({id: 'machdev', exe: '/usr/bin/mach', lang: 'mach'}), env);
+        expect(dev.manifest([])).toContain('[dep.std]\npath = "/src/mach/dep/std"\n');
     });
 });
