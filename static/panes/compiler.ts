@@ -197,6 +197,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
     private rustMacroExpButton: JQuery<HTMLButtonElement>;
     private rustHirButton: JQuery<HTMLButtonElement>;
     private haskellCoreButton: JQuery<HTMLButtonElement>;
+    private machIrButton: JQuery<HTMLButtonElement>;
     private haskellStgButton: JQuery<HTMLButtonElement>;
     private haskellCmmButton: JQuery<HTMLButtonElement>;
     private leanCButton: JQuery<HTMLButtonElement>;
@@ -274,6 +275,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
     private rustMacroExpViewOpen: boolean;
     private rustHirViewOpen: boolean;
     private haskellCoreViewOpen: boolean;
+    private machIrViewOpen: boolean;
     private haskellStgViewOpen: boolean;
     private haskellCmmViewOpen: boolean;
     private leanCViewOpen: boolean;
@@ -634,6 +636,17 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
             );
         };
 
+        const createMachIrView = () => {
+            return Components.getMachIrViewWith(
+                this.id,
+                this.source,
+                this.lastResult?.machIrOutput,
+                this.getCompilerName(),
+                this.sourceEditorId ?? 0,
+                this.sourceTreeId ?? 0,
+            );
+        };
+
         const createHaskellStgView = () => {
             return Components.getHaskellStgViewWith(
                 this.id,
@@ -912,6 +925,18 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
                 this.hub.findParentRowOrColumn(this.container.parent) ||
                 this.container.layoutManager.root.contentItems[0];
             insertPoint.addChild(createHaskellCoreView());
+        });
+
+        createDragSource(this.container.layoutManager, this.machIrButton, () => createMachIrView()).on(
+            'dragStart',
+            hidePaneAdder,
+        );
+
+        this.machIrButton.on('click', () => {
+            const insertPoint =
+                this.hub.findParentRowOrColumn(this.container.parent) ||
+                this.container.layoutManager.root.contentItems[0];
+            insertPoint.addChild(createMachIrView());
         });
 
         createDragSource(this.container.layoutManager, this.haskellStgButton, () => createHaskellStgView()).on(
@@ -1390,6 +1415,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
                 produceRustMacroExp: this.rustMacroExpViewOpen,
                 produceRustHir: this.rustHirViewOpen,
                 produceHaskellCore: this.haskellCoreViewOpen,
+                produceMachIr: this.machIrViewOpen,
                 produceHaskellStg: this.haskellStgViewOpen,
                 produceHaskellCmm: this.haskellCmmViewOpen,
                 produceLeanC: this.leanCViewOpen ? this.leanCOptions : null,
@@ -2205,6 +2231,21 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
         }
     }
 
+    onMachIrViewOpened(id: number): void {
+        if (this.id === id) {
+            this.machIrButton.prop('disabled', true);
+            this.machIrViewOpen = true;
+            this.compile();
+        }
+    }
+
+    onMachIrViewClosed(id: number): void {
+        if (this.id === id) {
+            this.machIrButton.prop('disabled', false);
+            this.machIrViewOpen = false;
+        }
+    }
+
     onHaskellCoreViewOpened(id: number): void {
         if (this.id === id) {
             this.haskellCoreButton.prop('disabled', true);
@@ -2558,6 +2599,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
         this.rustMacroExpButton = this.domRoot.find('.btn.view-rustmacroexp');
         this.rustHirButton = this.domRoot.find('.btn.view-rusthir');
         this.haskellCoreButton = this.domRoot.find('.btn.view-haskellCore');
+        this.machIrButton = this.domRoot.find('.btn.view-machIr');
         this.haskellStgButton = this.domRoot.find('.btn.view-haskellStg');
         this.haskellCmmButton = this.domRoot.find('.btn.view-haskellCmm');
         this.leanCButton = this.domRoot.find('.btn.view-leanC');
@@ -2858,6 +2900,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
         this.deviceButton.prop('disabled', this.deviceViewOpen);
         this.rustMirButton.prop('disabled', this.rustMirViewOpen);
         this.haskellCoreButton.prop('disabled', this.haskellCoreViewOpen);
+        this.machIrButton.prop('disabled', this.machIrViewOpen);
         this.haskellStgButton.prop('disabled', this.haskellStgViewOpen);
         this.haskellCmmButton.prop('disabled', this.haskellCmmViewOpen);
         this.leanCButton.prop('disabled', this.leanCViewOpen);
@@ -2883,6 +2926,7 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
         this.rustMacroExpButton.toggle(!!this.compiler.supportsRustMacroExpView);
         this.rustHirButton.toggle(!!this.compiler.supportsRustHirView);
         this.haskellCoreButton.toggle(!!this.compiler.supportsHaskellCoreView);
+        this.machIrButton.toggle(!!this.compiler.supportsMachIrView);
         this.haskellStgButton.toggle(!!this.compiler.supportsHaskellStgView);
         this.haskellCmmButton.toggle(!!this.compiler.supportsHaskellCmmView);
         this.leanCButton.toggle(!!this.compiler.supportsLeanCView);
@@ -3062,6 +3106,8 @@ export class Compiler extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Co
         this.eventHub.on('rustMacroExpViewClosed', this.onRustMacroExpViewClosed, this);
         this.eventHub.on('rustHirViewOpened', this.onRustHirViewOpened, this);
         this.eventHub.on('rustHirViewClosed', this.onRustHirViewClosed, this);
+        this.eventHub.on('machIrViewOpened', this.onMachIrViewOpened, this);
+        this.eventHub.on('machIrViewClosed', this.onMachIrViewClosed, this);
         this.eventHub.on('haskellCoreViewOpened', this.onHaskellCoreViewOpened, this);
         this.eventHub.on('haskellCoreViewClosed', this.onHaskellCoreViewClosed, this);
         this.eventHub.on('haskellStgViewOpened', this.onHaskellStgViewOpened, this);

@@ -56,6 +56,7 @@ export type MachTarget = {
  *   src/example.mach        the user's source (and any extra files, rooted at src/)
  *   dep/std/                realized by `mach dep pull` from the std installed beside the compiler, or `stdPath`
  *   out/obj/example/*.o     per-module objects, disassembled with objdump against their DWARF line table
+ *   out/ir/example/*.ir     module SSA text, for the Mach IR pane
  *   out/bin/example         the linked executable
  */
 export class MachCompiler extends BaseCompiler {
@@ -72,6 +73,7 @@ export class MachCompiler extends BaseCompiler {
             this.compilerProps<string>(`compiler.${this.compiler.id}.stdPath`) ??
             path.join(path.dirname(this.compiler.exe), 'std');
         this.compiler.supportsTarget = true;
+        this.compiler.supportsMachIrView = true;
     }
 
     override getArgumentParserClass() {
@@ -172,6 +174,17 @@ export class MachCompiler extends BaseCompiler {
 
     override getExecutableFilename(dirPath: string, outputFilebase: string, key?: CacheKey | CompilationCacheKey) {
         return path.join(dirPath, 'out', 'bin', this.projectId);
+    }
+
+    override optionsForBackend(backendOptions: Record<string, any>, outputFilename: string) {
+        const options = super.optionsForBackend(backendOptions, outputFilename);
+        if (backendOptions.produceMachIr && this.compiler.supportsMachIrView) options.push('--emit-ir');
+        return options;
+    }
+
+    override getMachIrOutputFilename(inputFilename: string): string {
+        const id = this.projectId;
+        return path.join(this.projectRoot(inputFilename), 'out', 'ir', id, `${id}.ir`);
     }
 
     override optionsForFilter(filters: ParseFiltersAndOutputOptions, outputFilename: string) {
