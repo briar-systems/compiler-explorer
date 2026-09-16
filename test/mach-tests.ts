@@ -22,15 +22,18 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+import {readFileSync} from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
-import {beforeAll, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {CompilationEnvironment} from '../lib/compilation-env.js';
 import {MachCompiler} from '../lib/compilers/mach.js';
+import {AsmParser} from '../lib/parsers/asm-parser.js';
 import {LanguageKey} from '../types/languages.interfaces.js';
-import {makeCompilationEnvironment, makeFakeCompilerInfo} from './utils.js';
+import {makeCompilationEnvironment, makeFakeCompilerInfo, makeFakeParseFiltersAndOutputOptions} from './utils.js';
 
 const languages = {
     mach: {id: 'mach' as LanguageKey, extensions: ['.mach']},
@@ -179,5 +182,273 @@ describe('Mach project layout', () => {
         const env = makeCompilationEnvironment({languages, props: {'compiler.machdev.stdPath': '/src/mach/dep/std'}});
         const dev = new MachCompiler(makeFakeCompilerInfo({id: 'machdev', exe: '/usr/bin/mach', lang: 'mach'}), env);
         expect(dev.manifest([])).toContain('[dep.std]\npath = "/src/mach/dep/std"\n');
+    });
+});
+/**
+ * Every project the adapter lays out puts the user's sources under `src/`, so CE's file names become module paths
+ * rooted at the project id: `src/util/fmt.mach` is the module `example.util.fmt`.
+ */
+describe('Mach multi-file projects', () => {
+    let compiler: MachCompiler;
+    let dirPath: string;
+
+    beforeAll(() => {
+        compiler = new MachCompiler(
+            makeFakeCompilerInfo({id: 'mach', exe: '/opt/compiler-explorer/mach-5.0.4/mach', lang: 'mach'}),
+            makeCompilationEnvironment({languages}),
+        );
+        vi.spyOn(compiler, 'execCompilerCached').mockResolvedValue({
+            code: 0,
+            stdout: infoTargets,
+            stderr: '',
+        } as any);
+    });
+
+    beforeEach(async () => {
+        dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ce-mach-layout'));
+    });
+
+    afterEach(async () => {
+        await fs.rm(dirPath, {recursive: true, force: true});
+    });
+
+    it('roots every source at src/ and keeps the directories CE gave them', async () => {
+        const pull = vi.spyOn(compiler, 'exec').mockResolvedValue({code: 0, stdout: '', stderr: ''} as any);
+
+        const {inputFilename} = await (compiler as any).writeAllFiles(dirPath, 'entry', [
+            {filename: 'util/fmt.mach', contents: 'fmt'},
+            {filename: 'other.mach', contents: 'other'},
+        ]);
+
+        expect(inputFilename).toEqual(path.join(dirPath, 'src', 'example.mach'));
+        expect(((await fs.readdir(dirPath, {recursive: true})) as string[]).sort()).toEqual([
+            'mach.toml',
+            'src',
+            path.join('src', 'example.mach'),
+            path.join('src', 'other.mach'),
+            'src/util',
+            path.join('src', 'util', 'fmt.mach'),
+        ]);
+        expect(await fs.readFile(path.join(dirPath, 'src', 'util', 'fmt.mach'), 'utf8')).toEqual('fmt');
+        expect(pull).toHaveBeenCalledWith(
+            '/opt/compiler-explorer/mach-5.0.4/mach',
+            ['dep', 'pull', dirPath],
+            expect.objectContaining({customCwd: dirPath}),
+        );
+    });
+
+    it('refuses an extra file that would land outside the project', async () => {
+        vi.spyOn(compiler, 'exec').mockResolvedValue({code: 0, stdout: '', stderr: ''} as any);
+        await expect(
+            (compiler as any).writeAllFiles(dirPath, 'entry', [{filename: '../escape.mach', contents: 'no'}]),
+        ).rejects.toThrow();
+    });
+
+    it('fails the compilation when the dependency pull fails', async () => {
+        vi.spyOn(compiler, 'exec').mockResolvedValue({code: 1, stdout: '', stderr: 'no std'} as any);
+        await expect((compiler as any).writeAllFiles(dirPath, 'entry', [])).rejects.toThrow(
+            'mach dep pull failed: no std',
+        );
+    });
+});
+/**
+ * The shapes covered here are the ones `mach.cli.diagnostic` renders at 5.0.4: the `error:` and `warning:`
+ * headlines, the `--> file:line:col` frame and its gutter, a related frame underlined with `-`, the `= note:`,
+ * `= help:` and `= fix:` trailer, a fix edit's own location, the elided and truncated span bodies, a `Fail` with no
+ * location, and the `N errors / M warnings` summary. The renderer's severity catalog also has `info:` and `help:`
+ * headlines, which no caller in the compiler emits. Each capture is verbatim compiler output with the temp
+ * directory rewritten to a stable path.
+ */
+describe('Mach diagnostics', () => {
+    const inputFilename = '/tmp/compiler-explorer-compiler-mach/src/example.mach';
+    let compiler: MachCompiler;
+
+    beforeAll(() => {
+        compiler = new MachCompiler(
+            makeFakeCompilerInfo({id: 'mach', exe: '/opt/compiler-explorer/mach-5.0.4/mach', lang: 'mach'}),
+            makeCompilationEnvironment({languages}),
+        );
+    });
+
+    function parse(name: string) {
+        const capture = readFileSync(path.join(__dirname, 'mach', 'diagnostics', `${name}.txt`), 'utf8');
+        return compiler.processExecutionResult({code: 1, stdout: '', stderr: capture} as any, inputFilename).stderr;
+    }
+
+    /** What the editor gets: the line the marker hangs off, and the marker itself. */
+    function marks(name: string) {
+        return parse(name)
+            .filter(line => line.tag)
+            .map(line => ({on: line.text, ...line.tag}));
+    }
+
+    function texts(name: string) {
+        return parse(name).map(line => line.text);
+    }
+
+    it('marks an error at its span and leaves the summary as output', () => {
+        expect(marks('error')).toEqual([
+            {
+                on: 'error: unresolved identifier `bogus`',
+                file: 'example.mach',
+                line: 7,
+                column: 9,
+                text: 'error: unresolved identifier `bogus`',
+                severity: 3,
+            },
+            {on: ' --> <source>:7:9', file: 'example.mach', line: 7, column: 9, text: '', severity: 3},
+        ]);
+        expect(texts('error')).toContain('1 error / 0 warnings');
+    });
+
+    it('marks a warning at severity warning', () => {
+        expect(marks('warning')[0]).toMatchObject({
+            line: 8,
+            column: 3,
+            severity: 2,
+            text: 'warning: documented component matches no parameter, field, generic, or `ret` of this declaration',
+        });
+        expect(texts('warning')).toContain('0 errors / 1 warning');
+    });
+
+    it('keeps a warning and an error apart when both are reported', () => {
+        expect(marks('warning-and-error').map(m => [m.line, m.severity, m.text !== ''])).toEqual([
+            [8, 2, true],
+            // the location line's own marker is always an error: upstream leaves its text empty so it never shows
+            [8, 3, false],
+            [13, 3, true],
+            [13, 3, false],
+        ]);
+        expect(texts('warning-and-error')).toContain('1 error / 1 warning');
+    });
+
+    it('renders every trailer line, and marks the fix edit at its own location', () => {
+        expect(texts('note-and-fix')).toEqual(
+            expect.arrayContaining([
+                '  = note: mach has no implicit widening; cast the value with `value::Type`',
+                '  = fix: cast the value to `i64`',
+                '    -> replace with `::i64`',
+            ]),
+        );
+        // the headline marks the expression; the fix marks the column the replacement goes at
+        expect(marks('note-and-fix').map(m => [m.line, m.column, m.text])).toEqual([
+            [8, 5, 'error: type mismatch: expected i64, found i32'],
+            [8, 5, ''],
+            [8, 10, '  = fix: cast the value to `i64`'],
+            [8, 10, ''],
+        ]);
+    });
+
+    it('renders a help child and marks its fix', () => {
+        expect(texts('help-and-fix')).toContain('  = help: did you mean `helper`?');
+        expect(marks('help-and-fix').map(m => [m.line, m.column])).toEqual([
+            [9, 9],
+            [9, 9],
+            [9, 9],
+            [9, 9],
+        ]);
+    });
+
+    it('marks both edits of a two-edit fix over a multi-line span', () => {
+        expect(marks('two-edit-fix').map(m => [m.line, m.column, m.text])).toEqual([
+            [8, 5, 'error: type mismatch: expected i64, found i32'],
+            [8, 5, ''],
+            [8, 9, '   = fix: cast the value to `i64`'],
+            [8, 9, ''],
+            [10, 10, '     -> replace with `(`'],
+            [10, 10, ''],
+        ]);
+        // the span body is output, never a marker
+        expect(texts('two-edit-fix')).toEqual(expect.arrayContaining([' 9 |         +', '   | ---------']));
+    });
+
+    it('leaves an elided span body and a truncated long line as plain output', () => {
+        expect(texts('elided-span')).toContain('   | ...');
+        expect(marks('elided-span').map(m => m.line)).toEqual([8, 8, 8, 8, 20, 20]);
+
+        expect(texts('long-line').find(line => line.startsWith('7 |'))).toMatch(/\.\.\.$/);
+        expect(marks('long-line').map(m => [m.line, m.column])).toEqual([
+            [7, 9],
+            [7, 9],
+        ]);
+    });
+
+    it('names a second file by its basename, which is all CE gives the editor to match on', () => {
+        // the file is written at src/util/fmt.mach, so a tree pane holding it as `util/fmt.mach` will not match:
+        // briar-systems/compiler-explorer#13
+        expect(marks('second-file')[0]).toMatchObject({file: 'fmt.mach', line: 2, column: 9});
+    });
+
+    it('names the std file a diagnostic came from', () => {
+        // naming it is as far as the adapter goes: without a tree pane the editor applies the marker anyway, so this
+        // still lands on the user's line 193: briar-systems/compiler-explorer#16
+        expect(marks('std')[0]).toMatchObject({file: 'derive.mach', line: 193, column: 5, severity: 3});
+    });
+
+    it('marks nothing for a failure that carries no location', () => {
+        expect(texts('fail')).toEqual(['error: no mach.toml in the project directory']);
+        expect(marks('fail')).toEqual([]);
+    });
+
+    it('sinks an info or a help headline to an error marker', () => {
+        // the renderer's severity catalog has four headlines; CE reads severity off the headline text and knows only
+        // `warning` and `note`, so `info:` and `help:` arrive as errors: briar-systems/compiler-explorer#15. No
+        // caller in the compiler emits either at 5.0.4, so this is the renderer's contract, not a capture.
+        const headlines = ['info: a remark', 'help: try this'];
+        const rendered = headlines
+            .map(h => `${h}\n --> ${inputFilename}:3:1\n  |\n3 | ret 0;\n  | ^^^^^^\n`)
+            .join('\n');
+        const marks = compiler
+            .processExecutionResult({code: 0, stdout: '', stderr: rendered} as any, inputFilename)
+            .stderr.filter(line => line.tag)
+            .map(line => line.tag!.severity);
+        expect(marks).toEqual([3, 3, 3, 3]);
+    });
+
+    it('marks a related frame at its location, but loses the label that explains it', () => {
+        // the marker text is the gutter bar the `-->` line follows, and `previous definition here` never reaches the
+        // editor at all: briar-systems/compiler-explorer#14
+        expect(marks('related').map(m => [m.line, m.text])).toEqual([
+            [6, 'error: duplicate definition: `dup` is already bound in this scope'],
+            [6, ''],
+            [5, '  |'],
+            [5, ''],
+        ]);
+        expect(texts('related')).toContain('  |     --- previous definition here');
+    });
+});
+/**
+ * Under the production sandbox the compile directory is bind-mounted at `/app`, so the project root the adapter
+ * passes to `mach build` is `/app` and the DWARF comp_dir it records is `/app` too. The capture below is a real
+ * objdump of an object built with the project root at `/app`.
+ */
+describe('Mach asm with an /app project root', () => {
+    it('attributes an /app source line to the editor', () => {
+        const objdump = readFileSync(path.join(__dirname, 'mach', 'app-objdump.asm'), 'utf8');
+        const parsed = new AsmParser().process(
+            objdump,
+            makeFakeParseFiltersAndOutputOptions({binaryObject: true, directives: true}),
+        );
+
+        expect(parsed.asm.filter(line => line.source).map(line => line.source)).toContainEqual({
+            file: null,
+            line: 9,
+            mainsource: true,
+        });
+        expect(parsed.asm.map(line => line.text)).toContain('main:');
+    });
+
+    it('strips the /app root when filenames are not masked', () => {
+        const objdump = readFileSync(path.join(__dirname, 'mach', 'app-objdump.asm'), 'utf8');
+        const parsed = new AsmParser().process(
+            objdump,
+            makeFakeParseFiltersAndOutputOptions({binaryObject: true, directives: true, dontMaskFilenames: true}),
+        );
+
+        expect(parsed.asm.filter(line => line.source).map(line => line.source)).toContainEqual({
+            file: 'src/example.mach',
+            line: 9,
+            mainsource: true,
+        });
     });
 });

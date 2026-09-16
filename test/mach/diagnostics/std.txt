@@ -1,0 +1,8 @@
+error: std.derive: a reference field is detected but not followed -- address semantics versus deep semantics is the caller's choice, and a deep walk allocates, so it needs an allocator and a failure mode this signature does not have. note that str is *char, so a str field lands here
+   --> /tmp/compiler-explorer-compiler-mach/dep/std/src/derive.mach:193:5
+    |
+193 |     check[T]();
+    |     ^^^^^^^^^^
+
+1 error / 0 warnings
+
