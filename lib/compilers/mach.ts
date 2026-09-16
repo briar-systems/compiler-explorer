@@ -37,6 +37,7 @@ import type {BasicExecutionResult, UnprocessedExecResult} from '../../types/exec
 import type {ParseFiltersAndOutputOptions} from '../../types/features/filters.interfaces.js';
 import {BaseCompiler} from '../base-compiler.js';
 import {CompilationEnvironment} from '../compilation-env.js';
+import * as temp from '../temp.js';
 import * as utils from '../utils.js';
 import {MachParser} from './argument-parsers.js';
 
@@ -46,13 +47,77 @@ export type MachTarget = {
     isa: string;
     os: string;
     abi: string;
+    object: string;
 };
+
+/**
+ * What the probe compiles. Every compilation realizes std into the project, and two of the three examples import it,
+ * so a module that never reaches it would clear targets that no real program can use: std has no freestanding os
+ * layer, and a `use std.print` there fails deep inside std rather than at the import.
+ */
+const probeSource = [
+    'use print: std.print;',
+    '',
+    'pub fun probe() i64 {',
+    '    print.println("probe");',
+    '    ret 0;',
+    '}',
+    '',
+].join('\n');
+
+/**
+ * The profile every compilation builds under. A target that cannot be resolved against it produces no view at all, so
+ * the same lines drive the probe that decides which targets are worth offering.
+ */
+const profile = [
+    '[profile.ce]',
+    'default = true',
+    'opt = 0',
+    'debug = true',
+    'simd = "scalarize"',
+    'vectorize = true',
+    'float_reassoc = false',
+    '',
+];
+
+/**
+ * Each tuple names its object format explicitly. Omitting it takes the os's default, which for freestanding is the
+ * flat image: it carries neither a debug model nor linkable objects, so the ELF row of the same tuple never gets a
+ * chance to be the one that builds.
+ */
+function targetSection(target: MachTarget): string[] {
+    return [
+        `[target.${target.name}]`,
+        `isa = "${target.isa}"`,
+        `os = "${target.os}"`,
+        `abi = "${target.abi}"`,
+        `of = "${target.object}"`,
+        '',
+    ];
+}
+
+/** The manifest key a tuple is probed under, positional so that tuples sharing a platform name stay distinct. */
+function probeKey(index: number): string {
+    return `t${index}`;
+}
+
+/** A platform name shared by several tuples is qualified by abi, then by object format, until every key is unique. */
+function qualifyNames(rows: MachTarget[]): MachTarget[] {
+    return rows.map(row => {
+        const samePlatform = rows.filter(other => other.name === row.name);
+        if (samePlatform.length === 1) return row;
+        const name = `${row.name}-${row.abi}`;
+        return samePlatform.filter(other => other.abi === row.abi).length === 1
+            ? {...row, name}
+            : {...row, name: `${name}-${row.object}`};
+    });
+}
 
 /**
  * Mach has no single-file mode: every build is a project with a manifest and a realized dependency closure (std
  * included). Each compilation therefore lays out a project in the temp dir:
  *
- *   mach.toml               generated; one bin artifact, every supported target, std as a path dependency
+ *   mach.toml               generated; one bin artifact, every buildable target, std as a path dependency
  *   src/example.mach        the user's source (and any extra files, rooted at src/)
  *   dep/std/                realized by `mach dep pull` from the std installed beside the compiler, or `stdPath`
  *   out/obj/example/*.o     per-module objects, disassembled with objdump against their DWARF line table
@@ -65,6 +130,8 @@ export class MachCompiler extends BaseCompiler {
     }
 
     private readonly stdPath: string;
+    /** The probe runs once per compiler: every compilation needs the same answer to write its manifest. */
+    private buildable?: Promise<MachTarget[]>;
 
     constructor(info: PreliminaryCompilerInfo, env: CompilationEnvironment) {
         super(info, env);
@@ -88,46 +155,95 @@ export class MachCompiler extends BaseCompiler {
         return path.dirname(path.dirname(inputFilename));
     }
 
-    /** Every (isa, os, abi) tuple from `mach info targets`, named after mach's own platform name. */
-    async targets(): Promise<MachTarget[]> {
+    /** Every (isa, os, abi, object) tuple `mach info targets` reports, named after mach's own platform name. */
+    async supportedTuples(): Promise<MachTarget[]> {
         const result = await this.execCompilerCached(this.compiler.exe, ['info', 'targets']);
         if (result.code !== 0) throw new Error(`mach info targets failed: ${result.stderr}`);
 
         const rows: MachTarget[] = [];
         for (const line of utils.splitLines(result.stdout)) {
-            const match = line.match(/^(\S+)\s+isa=(\S+)\s+os=(\S+)\s+abi=(\S+)\s+object=\S+/);
+            const match = line.match(/^(\S+)\s+isa=(\S+)\s+os=(\S+)\s+abi=(\S+)\s+object=(\S+)/);
             if (!match) continue;
-            const [, name, isa, os, abi] = match;
-            // raw and elf variants of one tuple are the same target to a manifest
-            if (!rows.some(r => r.name === name && r.abi === abi)) rows.push({name, isa, os, abi});
+            const [, name, isa, os, abi, object] = match;
+            rows.push({name, isa, os, abi, object});
         }
-        // a platform name with several abis is qualified by the abi so every key stays unique
-        return rows.map(r =>
-            rows.filter(other => other.name === r.name).length > 1 ? {...r, name: `${r.name}-${r.abi}`} : r,
+        return rows;
+    }
+
+    /**
+     * The tuples this compiler can actually produce a view for, probed rather than listed. Two things sink a tuple: an
+     * object format that registers no debug model, which the profile's debug information needs, and an os std has no
+     * layer for. Neither is knowable from what `mach info targets` prints, and both move between releases, so the
+     * answer comes from building rather than from a list here.
+     */
+    async targets(): Promise<MachTarget[]> {
+        this.buildable ??= this.probeTargets();
+        return await this.buildable;
+    }
+
+    private async probeTargets(): Promise<MachTarget[]> {
+        const tuples = await this.supportedTuples();
+        const dirPath = await this.newTempDir({hold: true});
+        try {
+            await this.layOutProbe(dirPath, tuples);
+            const rows: MachTarget[] = [];
+            for (const [index, target] of tuples.entries()) {
+                if (await this.buildsUnderProfile(dirPath, probeKey(index))) rows.push(target);
+            }
+            return qualifyNames(rows);
+        } finally {
+            temp.release(dirPath);
+            await fs.rm(dirPath, {recursive: true, force: true});
+        }
+    }
+
+    /**
+     * One project holding every tuple, which is the shape a compilation has: std is realized once, and each tuple is
+     * then selected the way a user selects one. Tuples are keyed positionally because the names they will be offered
+     * under are only settled once the unbuildable ones are gone.
+     */
+    private async layOutProbe(dirPath: string, tuples: MachTarget[]) {
+        await fs.mkdir(path.join(dirPath, 'src'), {recursive: true});
+        await fs.writeFile(path.join(dirPath, 'src', 'probe.mach'), probeSource);
+
+        const lines = ['[project]', 'id = "probe"', 'version = "0.0.0"', 'src = "src"', 'out = "out"', '', ...profile];
+        for (const [index, target] of tuples.entries())
+            lines.push(...targetSection({...target, name: probeKey(index)}));
+        lines.push(
+            '[artifact.probe]',
+            'kind = "bin"',
+            'entry = "probe.mach"',
+            'out = "bin/probe"',
+            `targets = [${tuples.map((_, index) => `"${probeKey(index)}"`).join(', ')}]`,
+            'link = []',
+            'need = []',
+            '',
+            '[dep.std]',
+            `path = ${JSON.stringify(this.stdPath)}`,
+            '',
         );
+        await fs.writeFile(path.join(dirPath, 'mach.toml'), lines.join('\n'));
+
+        const pull = await this.exec(this.compiler.exe, ['dep', 'pull', dirPath], {
+            ...this.getDefaultExecOptions(),
+            customCwd: dirPath,
+        });
+        if (pull.code !== 0) throw new Error(`mach dep pull failed: ${pull.stderr || pull.stdout}`);
+    }
+
+    /** Build the probe for one tuple, the way a compilation does, to see whether the tuple survives it. */
+    private async buildsUnderProfile(dirPath: string, key: string): Promise<boolean> {
+        const result = await this.exec(this.compiler.exe, ['build', dirPath, '--emit', 'obj', '--target', key], {
+            ...this.getDefaultExecOptions(),
+            customCwd: dirPath,
+        });
+        return result.code === 0;
     }
 
     manifest(targets: MachTarget[]): string {
         const id = this.projectId;
-        const lines = [
-            '[project]',
-            `id = "${id}"`,
-            'version = "0.0.0"',
-            'src = "src"',
-            'out = "out"',
-            '',
-            '[profile.ce]',
-            'default = true',
-            'opt = 0',
-            'debug = true',
-            'simd = "scalarize"',
-            'vectorize = true',
-            'float_reassoc = false',
-            '',
-        ];
-        for (const t of targets) {
-            lines.push(`[target.${t.name}]`, `isa = "${t.isa}"`, `os = "${t.os}"`, `abi = "${t.abi}"`, '');
-        }
+        const lines = ['[project]', `id = "${id}"`, 'version = "0.0.0"', 'src = "src"', 'out = "out"', '', ...profile];
+        for (const t of targets) lines.push(...targetSection(t));
         lines.push(
             `[artifact.${id}]`,
             'kind = "bin"',
