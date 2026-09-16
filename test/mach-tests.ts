@@ -22,9 +22,11 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
-import {beforeAll, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {CompilationEnvironment} from '../lib/compilation-env.js';
 import {MachCompiler} from '../lib/compilers/mach.js';
@@ -107,5 +109,72 @@ describe('Mach project layout', () => {
         const env = makeCompilationEnvironment({languages, props: {'compiler.machdev.stdPath': '/src/mach/dep/std'}});
         const dev = new MachCompiler(makeFakeCompilerInfo({id: 'machdev', exe: '/usr/bin/mach', lang: 'mach'}), env);
         expect(dev.manifest([])).toContain('[dep.std]\npath = "/src/mach/dep/std"\n');
+    });
+});
+/**
+ * Every project the adapter lays out puts the user's sources under `src/`, so CE's file names become module paths
+ * rooted at the project id: `src/util/fmt.mach` is the module `example.util.fmt`.
+ */
+describe('Mach multi-file projects', () => {
+    let compiler: MachCompiler;
+    let dirPath: string;
+
+    beforeAll(() => {
+        compiler = new MachCompiler(
+            makeFakeCompilerInfo({id: 'mach', exe: '/opt/compiler-explorer/mach-5.0.4/mach', lang: 'mach'}),
+            makeCompilationEnvironment({languages}),
+        );
+        vi.spyOn(compiler, 'execCompilerCached').mockResolvedValue({
+            code: 0,
+            stdout: infoTargets,
+            stderr: '',
+        } as any);
+    });
+
+    beforeEach(async () => {
+        dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ce-mach-layout'));
+    });
+
+    afterEach(async () => {
+        await fs.rm(dirPath, {recursive: true, force: true});
+    });
+
+    it('roots every source at src/ and keeps the directories CE gave them', async () => {
+        const pull = vi.spyOn(compiler, 'exec').mockResolvedValue({code: 0, stdout: '', stderr: ''} as any);
+
+        const {inputFilename} = await (compiler as any).writeAllFiles(dirPath, 'entry', [
+            {filename: 'util/fmt.mach', contents: 'fmt'},
+            {filename: 'other.mach', contents: 'other'},
+        ]);
+
+        expect(inputFilename).toEqual(path.join(dirPath, 'src', 'example.mach'));
+        expect(((await fs.readdir(dirPath, {recursive: true})) as string[]).sort()).toEqual([
+            'mach.toml',
+            'src',
+            path.join('src', 'example.mach'),
+            path.join('src', 'other.mach'),
+            'src/util',
+            path.join('src', 'util', 'fmt.mach'),
+        ]);
+        expect(await fs.readFile(path.join(dirPath, 'src', 'util', 'fmt.mach'), 'utf8')).toEqual('fmt');
+        expect(pull).toHaveBeenCalledWith(
+            '/opt/compiler-explorer/mach-5.0.4/mach',
+            ['dep', 'pull', dirPath],
+            expect.objectContaining({customCwd: dirPath}),
+        );
+    });
+
+    it('refuses an extra file that would land outside the project', async () => {
+        vi.spyOn(compiler, 'exec').mockResolvedValue({code: 0, stdout: '', stderr: ''} as any);
+        await expect(
+            (compiler as any).writeAllFiles(dirPath, 'entry', [{filename: '../escape.mach', contents: 'no'}]),
+        ).rejects.toThrow();
+    });
+
+    it('fails the compilation when the dependency pull fails', async () => {
+        vi.spyOn(compiler, 'exec').mockResolvedValue({code: 1, stdout: '', stderr: 'no std'} as any);
+        await expect((compiler as any).writeAllFiles(dirPath, 'entry', [])).rejects.toThrow(
+            'mach dep pull failed: no std',
+        );
     });
 });
