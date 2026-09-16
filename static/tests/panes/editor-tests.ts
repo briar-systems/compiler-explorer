@@ -32,44 +32,39 @@ import {ResultLine} from '../../../types/resultline/resultline.interfaces.js';
 import {Editor} from '../../panes/editor.js';
 
 /**
- * What the parser hands the editor for a build of `src/example.mach`: a diagnostic in the user's own source, one in
- * a second file of the project, and one inside the std the build realized at `dep/std`, which lies outside the
- * directory the project's sources were written to.
+ * What the parser hands the editor for rustc 1.96 building `example.rs` with `mod a;`: an error in the main source, a
+ * note in the crate's `a/mod.rs`, and a note inside the standard library, which lies outside the directory the crate
+ * was written to (see test/rust/diagnostics).
  */
 const diagnostics: (ResultLine & {sourcePane: string})[] = [
     {
-        text: 'error: unresolved identifier `bogus`',
-        sourcePane: 'mach #1',
-        tag: {
-            file: 'example.mach',
-            line: 7,
-            column: 9,
-            text: 'error: unresolved identifier `bogus`',
-            severity: 3,
-        },
+        text: 'error[E0308]: mismatched types',
+        sourcePane: 'rustc #1',
+        tag: {file: 'example.rs', line: 9, column: 10, text: 'error[E0308]: mismatched types', severity: 3},
     },
     {
-        text: 'error: unresolved identifier `nope`',
-        sourcePane: 'mach #1',
-        tag: {file: 'util/fmt.mach', line: 2, column: 9, text: 'error: unresolved identifier `nope`', severity: 3},
+        text: 'note: function defined here',
+        sourcePane: 'rustc #1',
+        tag: {file: 'a/mod.rs', line: 1, column: 8, text: 'note: function defined here', severity: 1},
     },
     {
-        text: 'error: a reference field is detected but not followed',
-        sourcePane: 'mach #1',
+        text: 'note: method defined here',
+        sourcePane: 'rustc #1',
         tag: {
-            file: '../dep/std/src/derive.mach',
-            line: 193,
-            column: 5,
-            text: 'error: a reference field is detected but not followed',
-            severity: 3,
+            file: '../opt/compiler-explorer/rust-1.96.0/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs',
+            line: 1003,
+            column: 12,
+            text: 'note: method defined here',
+            severity: 1,
         },
     },
 ];
 
-/** The tree of the project the diagnostics came from: the entry in one editor, `util/fmt.mach` in another. */
+/** The tree of the crate: `example.rs` in one editor, `a/mod.rs` in another, and `b/mod.rs` in a third. */
 const tree = {
     multifileService: {
-        getEditorIdByFilename: (filename: string) => ({'example.mach': 1, 'util/fmt.mach': 2})[filename] ?? null,
+        getEditorIdByFilename: (filename: string) =>
+            ({'example.rs': 1, 'a/mod.rs': 2, 'b/mod.rs': 3})[filename] ?? null,
         getMainSourceEditorId: () => 1,
     },
 };
@@ -81,35 +76,41 @@ function pane(id: number, trees: any[] = []) {
         hub: {trees},
         editor: {getModel: () => null},
         getTokenSpan: () => ({colBegin: 0, colEnd: 0}),
-        currentLanguage: {extensions: ['.mach']},
+        currentLanguage: {extensions: ['.rs']},
     });
     return view;
 }
 
-function marked(view: Editor, mainSource: string) {
-    return view.collectOutputWidgets(diagnostics, mainSource).widgets.map(w => [w.startLineNumber, w.message]);
+function marked(view: Editor, output = diagnostics) {
+    return view.collectOutputWidgets(output).widgets.map(w => [w.startLineNumber, w.message]);
 }
 
 describe('Editor diagnostics', () => {
-    it('marks only the main source of the compilation when there is no tree', () => {
-        // derive.mach:193 would mark line 193 of whatever the user has written: briar-systems/compiler-explorer#16
-        expect(marked(pane(1), 'example.mach')).toEqual([[7, 'error: unresolved identifier `bogus`']]);
+    it('marks nothing from outside the compiled sources when there is no tree', () => {
+        // a single-file compile: the standard library's note would otherwise mark line 1003 of the user's file
+        const single = diagnostics.filter(d => d.tag?.file !== 'a/mod.rs');
+        expect(marked(pane(1), single)).toEqual([[9, 'error[E0308]: mismatched types']]);
     });
 
     it('marks the editor holding the file a diagnostic names, subdirectories included', () => {
-        // a basename never matched a tree file under a directory: briar-systems/compiler-explorer#13
-        expect(marked(pane(2, [tree]), 'example.mach')).toEqual([[2, 'error: unresolved identifier `nope`']]);
-        expect(marked(pane(1, [tree]), 'example.mach')).toEqual([[7, 'error: unresolved identifier `bogus`']]);
+        expect(marked(pane(1, [tree]))).toEqual([[9, 'error[E0308]: mismatched types']]);
+        expect(marked(pane(2, [tree]))).toEqual([[1, 'note: function defined here']]);
     });
 
-    it('marks no editor of a tree for a file the project does not hold', () => {
-        expect(marked(pane(3, [tree]), 'example.mach')).toEqual([]);
+    it('marks no editor of a tree for a file the crate does not hold', () => {
+        // b/mod.rs shares a basename with a/mod.rs and with the standard library's vec/mod.rs
+        expect(marked(pane(3, [tree]))).toEqual([]);
     });
 
-    it('names the main source by what the compilation compiled', () => {
-        expect(pane(1).mainSourceFilename({inputFilename: '/tmp/ce-mach/src/example.mach'} as any)).toEqual(
-            'example.mach',
-        );
-        expect(pane(1).mainSourceFilename({} as any)).toEqual('example.mach');
+    it('still marks a single editor for a file named other than the compiled one', () => {
+        // co2 compiles `example.rs` but tags its diagnostics with the user's `example.co2`
+        const co2: (ResultLine & {sourcePane: string})[] = [
+            {
+                text: 'error: expected `;`',
+                sourcePane: 'co2 #1',
+                tag: {file: 'example.co2', line: 3, column: 1, text: 'error: expected `;`', severity: 3},
+            },
+        ];
+        expect(marked(pane(1), co2)).toEqual([[3, 'error: expected `;`']]);
     });
 });
