@@ -25,6 +25,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import Semver from 'semver';
+
+import type {ParsedAsmResultLine} from '../../types/asmresult/asmresult.interfaces.js';
 import type {
     CacheKey,
     CompilationCacheKey,
@@ -37,9 +40,13 @@ import type {BasicExecutionResult, UnprocessedExecResult} from '../../types/exec
 import type {ParseFiltersAndOutputOptions} from '../../types/features/filters.interfaces.js';
 import {BaseCompiler} from '../base-compiler.js';
 import {CompilationEnvironment} from '../compilation-env.js';
+import {MachIrParser} from '../parsers/mach-ir.js';
 import * as temp from '../temp.js';
 import * as utils from '../utils.js';
 import {MachParser} from './argument-parsers.js';
+
+/** The first release with `--emit-ir=listing`; before it the flag writes only the ir-debug dump (briar-systems/mach#3440). */
+const irListingVersion = '5.1.0';
 
 /** One platform tuple the compiler supports, keyed by the name a user passes to `--target`. */
 export type MachTarget = {
@@ -140,7 +147,9 @@ export class MachCompiler extends BaseCompiler {
             this.compilerProps<string>(`compiler.${this.compiler.id}.stdPath`) ??
             path.join(path.dirname(this.compiler.exe), 'std');
         this.compiler.supportsTarget = true;
-        this.compiler.supportsMachIrView = true;
+        // the pane's whole contract is a readable listing mapped to editor lines, which an older release cannot
+        // produce at all: offering it there would show the ir-debug dump and map nothing
+        this.compiler.supportsMachIrView = Semver.gte(utils.asSafeVer(this.compiler.semver), irListingVersion, true);
     }
 
     override getArgumentParserClass() {
@@ -294,8 +303,20 @@ export class MachCompiler extends BaseCompiler {
 
     override optionsForBackend(backendOptions: Record<string, any>, outputFilename: string) {
         const options = super.optionsForBackend(backendOptions, outputFilename);
-        if (backendOptions.produceMachIr && this.compiler.supportsMachIrView) options.push('--emit-ir');
+        // the bare flag writes the ir-debug dump, whose text is not a contract; the listing is the form tooling reads
+        if (backendOptions.produceMachIr && this.compiler.supportsMachIrView) options.push('--emit-ir=listing');
         return options;
+    }
+
+    /**
+     * The listing names files by the path the compilation was given, which the sandbox mounts at `/app`, so masking
+     * one yields the project-relative path the parser matches the user's source against.
+     */
+    override async processMachIrOutput(outpath: string, output: CompilationResult): Promise<ParsedAsmResultLine[]> {
+        if (output.code !== 0) return [{text: 'Failed to run compiler to get Mach IR'}];
+        if (!(await utils.fileExists(outpath))) return [{text: 'Internal error; unable to open output path'}];
+        const listing = await fs.readFile(outpath, 'utf8');
+        return new MachIrParser(path.posix.join('src', this.compileFilename)).process(listing);
     }
 
     override getMachIrOutputFilename(inputFilename: string): string {

@@ -24,36 +24,48 @@
 
 import * as monaco from 'monaco-editor';
 
-// the text of mach's --emit-ir dump: a module of typed SSA, where every instruction carries its
-// full state after a ';', which reads as a comment
+// the text of mach's --emit-ir=listing form: a module of typed SSA where each instruction is followed by its
+// `line:column`, or by `path:line:column` when it came from another file, written after a ';'
 function definition(): monaco.languages.IMonarchLanguage {
     return {
         defaultToken: '',
 
-        keywords: [
-            'ir-debug',
-            'module',
-            'types',
-            'state',
-            'val',
-            'fn',
-            'block',
-            'unattached',
+        keywords: ['ir-listing', 'module', 'fun', 'val', 'var', 'unattached', 'preds', 'null'],
+
+        // the linkage and decorator words a declaration carries in its '[...]'
+        linkage: [
+            'pub',
             'extern',
+            'inline',
+            'noreturn',
+            'test',
+            'weak',
+            'oblivious',
+            'scalar',
+            'noinline',
+            'naked',
+            'import',
             'local',
-            'preds',
+            'embed',
         ],
 
         tokenizer: {
             root: [
                 [/;.*$/, 'comment'],
 
+                // a secret operand keeps its '~', which is part of the name it qualifies
+                [/~?%p?[a-zA-Z_0-9]+/, 'variable'],
                 [/![a-zA-Z_0-9]+/, 'type'],
-                [/%[a-zA-Z_0-9]+/, 'variable'],
                 [/@"(?:[^"\\]|\\.)*"/, 'variable.predefined'],
                 [/@[a-zA-Z_.][\w.]*/, 'variable.predefined'],
 
-                [/[a-zA-Z_][\w-]*/, {cases: {'@keywords': 'keyword', '@default': 'identifier'}}],
+                // an opcode carries its meaning-changing flags as suffixes: mul.pure, store.secret, add.nsw
+                [/\b[a-z_][\w]*(?:\.(?:nsw|nuw|exact|volatile|secret|pure))+/, 'keyword.operator'],
+
+                [
+                    /[a-zA-Z_][\w-]*/,
+                    {cases: {'@keywords': 'keyword', '@linkage': 'keyword.flow', '@default': 'identifier'}},
+                ],
 
                 [/"(?:[^"\\]|\\.)*"/, 'string'],
                 [/0x[0-9a-fA-F]+/, 'number.hex'],
@@ -61,7 +73,7 @@ function definition(): monaco.languages.IMonarchLanguage {
 
                 [/[{}()[\]]/, '@brackets'],
                 [/[<>]/, '@brackets'],
-                [/[,:=]/, 'delimiter'],
+                [/[,:=*]/, 'delimiter'],
                 [/\s+/, 'white'],
             ],
         },

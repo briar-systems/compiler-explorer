@@ -1782,7 +1782,7 @@ export class BaseCompiler {
         return utils.changeExtension(inputFilename, '.ir');
     }
 
-    async processMachIrOutput(outpath: string, output: CompilationResult): Promise<ResultLine[]> {
+    async processMachIrOutput(outpath: string, output: CompilationResult): Promise<ParsedAsmResultLine[]> {
         if (output.code !== 0) return [{text: 'Failed to run compiler to get Mach IR'}];
         if (await utils.fileExists(outpath)) {
             const content = await fs.readFile(outpath, 'utf8');
