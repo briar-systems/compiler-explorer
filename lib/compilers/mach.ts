@@ -51,6 +51,21 @@ export type MachTarget = {
 };
 
 /**
+ * What the probe compiles. Every compilation realizes std into the project, and two of the three examples import it,
+ * so a module that never reaches it would clear targets that no real program can use: std has no freestanding os
+ * layer, and a `use std.print` there fails deep inside std rather than at the import.
+ */
+const probeSource = [
+    'use print: std.print;',
+    '',
+    'pub fun probe() i64 {',
+    '    print.println("probe");',
+    '    ret 0;',
+    '}',
+    '',
+].join('\n');
+
+/**
  * The profile every compilation builds under. A target that cannot be resolved against it produces no view at all, so
  * the same lines drive the probe that decides which targets are worth offering.
  */
@@ -79,6 +94,11 @@ function targetSection(target: MachTarget): string[] {
         `of = "${target.object}"`,
         '',
     ];
+}
+
+/** The manifest key a tuple is probed under, positional so that tuples sharing a platform name stay distinct. */
+function probeKey(index: number): string {
+    return `t${index}`;
 }
 
 /** A platform name shared by several tuples is qualified by abi, then by object format, until every key is unique. */
@@ -151,9 +171,10 @@ export class MachCompiler extends BaseCompiler {
     }
 
     /**
-     * The tuples this compiler can actually produce a view for, probed rather than listed: the profile above asks for
-     * debug information, and a tuple whose object format registers no debug model fails before it emits anything. A
-     * format that gains one starts being offered on its own, with no change here.
+     * The tuples this compiler can actually produce a view for, probed rather than listed. Two things sink a tuple: an
+     * object format that registers no debug model, which the profile's debug information needs, and an os std has no
+     * layer for. Neither is knowable from what `mach info targets` prints, and both move between releases, so the
+     * answer comes from building rather than from a list here.
      */
     async targets(): Promise<MachTarget[]> {
         this.buildable ??= this.probeTargets();
@@ -161,11 +182,13 @@ export class MachCompiler extends BaseCompiler {
     }
 
     private async probeTargets(): Promise<MachTarget[]> {
+        const tuples = await this.supportedTuples();
         const dirPath = await this.newTempDir({hold: true});
         try {
+            await this.layOutProbe(dirPath, tuples);
             const rows: MachTarget[] = [];
-            for (const target of await this.supportedTuples()) {
-                if (await this.buildsUnderProfile(dirPath, target)) rows.push(target);
+            for (const [index, target] of tuples.entries()) {
+                if (await this.buildsUnderProfile(dirPath, probeKey(index))) rows.push(target);
             }
             return qualifyNames(rows);
         } finally {
@@ -174,35 +197,45 @@ export class MachCompiler extends BaseCompiler {
         }
     }
 
-    /** Compile a throwaway module for one tuple, the way a compilation does, to see whether the tuple survives it. */
-    private async buildsUnderProfile(dirPath: string, target: MachTarget): Promise<boolean> {
-        const root = path.join(dirPath, `${target.name}-${target.abi}-${target.object}`);
-        await fs.mkdir(path.join(root, 'src'), {recursive: true});
-        await fs.writeFile(path.join(root, 'src', 'probe.mach'), 'pub fun probe() i64 {\n    ret 0;\n}\n');
-        await fs.writeFile(
-            path.join(root, 'mach.toml'),
-            [
-                '[project]',
-                'id = "probe"',
-                'version = "0.0.0"',
-                'src = "src"',
-                'out = "out"',
-                '',
-                ...profile,
-                ...targetSection(target),
-                '[artifact.probe]',
-                'kind = "bin"',
-                'entry = "probe.mach"',
-                'out = "bin/probe"',
-                `targets = ["${target.name}"]`,
-                'link = []',
-                'need = []',
-                '',
-            ].join('\n'),
+    /**
+     * One project holding every tuple, which is the shape a compilation has: std is realized once, and each tuple is
+     * then selected the way a user selects one. Tuples are keyed positionally because the names they will be offered
+     * under are only settled once the unbuildable ones are gone.
+     */
+    private async layOutProbe(dirPath: string, tuples: MachTarget[]) {
+        await fs.mkdir(path.join(dirPath, 'src'), {recursive: true});
+        await fs.writeFile(path.join(dirPath, 'src', 'probe.mach'), probeSource);
+
+        const lines = ['[project]', 'id = "probe"', 'version = "0.0.0"', 'src = "src"', 'out = "out"', '', ...profile];
+        for (const [index, target] of tuples.entries())
+            lines.push(...targetSection({...target, name: probeKey(index)}));
+        lines.push(
+            '[artifact.probe]',
+            'kind = "bin"',
+            'entry = "probe.mach"',
+            'out = "bin/probe"',
+            `targets = [${tuples.map((_, index) => `"${probeKey(index)}"`).join(', ')}]`,
+            'link = []',
+            'need = []',
+            '',
+            '[dep.std]',
+            `path = ${JSON.stringify(this.stdPath)}`,
+            '',
         );
-        const result = await this.exec(this.compiler.exe, ['build', root, '--emit', 'obj'], {
+        await fs.writeFile(path.join(dirPath, 'mach.toml'), lines.join('\n'));
+
+        const pull = await this.exec(this.compiler.exe, ['dep', 'pull', dirPath], {
             ...this.getDefaultExecOptions(),
-            customCwd: root,
+            customCwd: dirPath,
+        });
+        if (pull.code !== 0) throw new Error(`mach dep pull failed: ${pull.stderr || pull.stdout}`);
+    }
+
+    /** Build the probe for one tuple, the way a compilation does, to see whether the tuple survives it. */
+    private async buildsUnderProfile(dirPath: string, key: string): Promise<boolean> {
+        const result = await this.exec(this.compiler.exe, ['build', dirPath, '--emit', 'obj', '--target', key], {
+            ...this.getDefaultExecOptions(),
+            customCwd: dirPath,
         });
         return result.code === 0;
     }

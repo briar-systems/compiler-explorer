@@ -65,16 +65,31 @@ freestanding-spirv    isa=spirv     os=freestanding  abi=spirv    object=spv
 // the formats that registered a debug model in mach 5.0.4; every other one refused the adapter's debug profile
 const debugCapableFormats = new Set(['elf', 'macho']);
 
-/** Stands in for a probe build, answering from the object format the probe manifest selected. */
-async function fakeProbe(root: string) {
+/**
+ * Stands in for one probe build, reproducing what mach 5.0.4 answered for the probe module: std has no layer for a
+ * freestanding os, so a `use std.print` there fails inside std whatever the object format, and a format with no debug
+ * model refuses the profile's debug information.
+ */
+async function fakeProbe(root: string, key: string) {
     const manifest = await fs.readFile(path.join(root, 'mach.toml'), 'utf8');
-    const of = manifest.match(/^of = "(\S+)"$/m)?.[1];
-    if (of && debugCapableFormats.has(of)) return {code: 0, stdout: '', stderr: ''};
-    return {
-        code: 2,
-        stdout: '',
-        stderr: 'error: debug info was requested, but this target registers no debug model',
-    };
+    const section = manifest.match(new RegExp(`^\\[target\\.${key}]\\n(?:\\w+ = "\\S+"\\n)+`, 'm'))![0];
+    const os = section.match(/^os = "(\S+)"$/m)![1];
+    const of = section.match(/^of = "(\S+)"$/m)![1];
+    // std.types is header-only and resolves anywhere; anything above it reaches for an os
+    const source = await fs.readFile(path.join(root, 'src', 'probe.mach'), 'utf8');
+    const usesStdOs = /^use .*\bstd\.(?!types\b)/m.test(source);
+
+    if (os === 'freestanding' && usesStdOs) {
+        return {code: 2, stdout: '745 errors / 0 warnings', stderr: 'error: unresolved identifier `native_read_at`'};
+    }
+    if (!debugCapableFormats.has(of)) {
+        return {
+            code: 2,
+            stdout: '',
+            stderr: 'error: debug info was requested, but this target registers no debug model',
+        };
+    }
+    return {code: 0, stdout: '', stderr: ''};
 }
 
 describe('Mach project layout', () => {
@@ -92,7 +107,11 @@ describe('Mach project layout', () => {
             stdout: infoTargets,
             stderr: '',
         } as any);
-        vi.spyOn(compiler, 'exec').mockImplementation(async (_exe, args) => (await fakeProbe(args[1])) as any);
+        vi.spyOn(compiler, 'exec').mockImplementation(async (_exe, args) =>
+            args[0] === 'dep'
+                ? ({code: 0, stdout: '', stderr: ''} as any)
+                : ((await fakeProbe(args[1], args[5])) as any),
+        );
     });
 
     it('offers only the tuples that build under the profile, named by the dimensions that disambiguate them', async () => {
@@ -104,20 +123,15 @@ describe('Mach project layout', () => {
             'linux-riscv64-lp64d',
             'darwin-x86_64',
             'darwin-aarch64',
-            'freestanding-x86_64-sysv64',
-            'freestanding-x86_64-win64',
-            'freestanding-aarch64',
-            'freestanding-riscv64-lp64',
-            'freestanding-riscv64-lp64f',
-            'freestanding-riscv64-lp64d',
-            'freestanding-riscv32',
         ]);
     });
 
-    it('probes every tuple `mach info targets` reports, each under its own object format', async () => {
+    it('probes every tuple `mach info targets` reports, against one project with std realized once', async () => {
         await compiler.targets();
         expect((await compiler.supportedTuples()).length).toEqual(23);
-        expect((compiler.exec as any).mock.calls.length).toEqual(23);
+        const calls = (compiler.exec as any).mock.calls.map((call: any[]) => call[1]);
+        expect(calls.filter((args: string[]) => args[0] === 'dep')).toHaveLength(1);
+        expect(calls.filter((args: string[]) => args[0] === 'build')).toHaveLength(23);
     });
 
     it('declares every offered target with its object format, the source entry and the bundled std', async () => {
@@ -125,13 +139,14 @@ describe('Mach project layout', () => {
         expect(manifest).toContain(
             '[target.linux-riscv64-lp64d]\nisa = "rv64gc"\nos = "linux"\nabi = "lp64d"\nof = "elf"\n',
         );
-        // freestanding defaults to the flat image, which carries no debug model and no linkable object
+        // the format is written out, not assumed: leaving it off takes the os default, which for freestanding is raw
         expect(manifest).toContain(
-            '[target.freestanding-x86_64-sysv64]\nisa = "x86_64"\nos = "freestanding"\nabi = "sysv64"\nof = "elf"\n',
+            '[target.darwin-aarch64]\nisa = "aarch64"\nos = "darwin"\nabi = "aapcs64"\nof = "macho"\n',
         );
         expect(manifest).toContain('[artifact.example]\nkind = "bin"\nentry = "example.mach"\n');
+        // coff registers no debug model, and std has no freestanding os layer
         expect(manifest).not.toContain('windows-x86_64');
-        expect(manifest).not.toContain('freestanding-spirv');
+        expect(manifest).not.toContain('freestanding');
         expect(manifest).toContain('[dep.std]\npath = "/opt/compiler-explorer/mach-5.0.4/std"\n');
     });
 
