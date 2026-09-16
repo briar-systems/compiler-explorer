@@ -28,7 +28,6 @@ import $ from 'jquery';
 import * as monaco from 'monaco-editor';
 import {editor} from 'monaco-editor';
 import * as monacoVim from 'monaco-vim';
-import path from 'path-browserify';
 import TomSelect from 'tom-select';
 import _ from 'underscore';
 
@@ -1503,19 +1502,7 @@ export class Editor extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Edit
         return all;
     }
 
-    /**
-     * The name the compilation knew this editor's source by, which is the name a diagnostic raised in it is tagged
-     * with. Every other name a diagnostic can carry belongs to another file of the compilation.
-     */
-    mainSourceFilename(result: CompilationResult): string {
-        if (result.inputFilename) return path.basename(result.inputFilename);
-        return 'example' + this.currentLanguage?.extensions[0];
-    }
-
-    collectOutputWidgets(
-        output: (ResultLine & {sourcePane: string})[],
-        mainSource: string,
-    ): {
+    collectOutputWidgets(output: (ResultLine & {sourcePane: string})[]): {
         fixes: monaco.languages.CodeAction[];
         widgets: editor.IMarkerData[];
     } {
@@ -1536,9 +1523,9 @@ export class Editor extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Edit
                             return undefined;
                         }
                     }
-                } else if (obj.tag.file && obj.tag.file !== mainSource) {
-                    // without a tree this editor holds the compilation's main source and nothing else, so a
-                    // diagnostic in another of its files, a library's sources among them, marks no line here
+                } else if (obj.tag.file?.startsWith('../')) {
+                    // a file outside the compilation's sources, such as a standard library's: without a tree this
+                    // editor holds only the compilation's own source, so the diagnostic marks no line here
                     return undefined;
                 }
 
@@ -1655,7 +1642,6 @@ export class Editor extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Edit
 
         const collectedOutput = this.collectOutputWidgets(
             this.getAllOutputAndErrors(result, compiler.name, compilerId),
-            this.mainSourceFilename(result),
         );
 
         this.setDecorationTags(collectedOutput.widgets, String(compilerId));
@@ -1696,10 +1682,7 @@ export class Editor extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Edit
                     this.getAllOutputAndErrors(result.buildResult, compiler.name, 'Executor ' + executorId),
                 );
             }
-            this.setDecorationTags(
-                this.collectOutputWidgets(output, this.mainSourceFilename(result.buildResult ?? result)).widgets,
-                'Executor ' + executorId,
-            );
+            this.setDecorationTags(this.collectOutputWidgets(output).widgets, 'Executor ' + executorId);
 
             this.numberUsedLines();
         }
