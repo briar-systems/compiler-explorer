@@ -37,7 +37,7 @@ import type {ParsedAsmResultLine} from '../types/asmresult/asmresult.interfaces.
 import type {CacheableValue} from '../types/cache.interfaces.js';
 import {BasicExecutionResult, UnprocessedExecResult} from '../types/execution/execution.interfaces.js';
 import {LanguageKey} from '../types/languages.interfaces.js';
-import type {Fix, ResultLine} from '../types/resultline/resultline.interfaces.js';
+import type {Fix, ResultLine, ResultLineTag} from '../types/resultline/resultline.interfaces.js';
 
 export {ce_temp_prefix, maskRootdirKeepingAppPrefix} from '../shared/common-utils.js';
 
@@ -282,8 +282,13 @@ export function parseRustOutput(lines: string, inputFilename?: string, pathPrefi
     ];
 
     const re = /^\s+-->\s+(?<filename>.*):(?<line>\d+):(?<column>\d+)/;
+    // the gutter bar a related frame's `-->` follows: furniture, never the headline of a diagnostic
+    const gutterRe = /^\s*\|\s*$/;
+    // the underline under a frame's source line, and the label that explains it: `  |     --- previous definition here`
+    const labelRe = /^\s*\|\s*[\^~+-]+\s+(?<label>\S.*?)\s*$/;
     const result: ResultLine[] = [];
     let currentDiagnostic: ResultLine | undefined;
+    let relatedFrame: ResultLineTag | undefined;
     eachLine(lines, line => {
         line = _parseOutputLine(line, inputFilename, pathPrefix);
         if (line !== null) {
@@ -297,17 +302,24 @@ export function parseRustOutput(lines: string, inputFilename?: string, pathPrefi
                 const line = Number.parseInt(match.groups.line, 10);
                 const column = Number.parseInt(match.groups.column, 10);
 
-                currentDiagnostic = result.pop();
-                if (currentDiagnostic !== undefined) {
-                    const text = filterEscapeSequences(currentDiagnostic.text);
-                    currentDiagnostic.tag = {
+                const previous = result[result.length - 1];
+                // a frame whose `-->` follows a gutter bar is a related location of the diagnostic above it: it has no
+                // headline of its own, and its text is the label on its underline instead
+                const headline =
+                    previous !== undefined && !gutterRe.test(filterEscapeSequences(previous.text))
+                        ? result.pop()
+                        : undefined;
+                if (headline !== undefined) {
+                    currentDiagnostic = headline;
+                    const text = filterEscapeSequences(headline.text);
+                    headline.tag = {
                         file,
                         line,
                         column,
                         text,
                         severity: parseSeverity(text),
                     };
-                    result.push(currentDiagnostic);
+                    result.push(headline);
                 }
 
                 lineObj.tag = {
@@ -317,6 +329,13 @@ export function parseRustOutput(lines: string, inputFilename?: string, pathPrefi
                     text: '', // Left empty so that it does not show up in the editor
                     severity: 3,
                 };
+                relatedFrame = headline === undefined ? lineObj.tag : undefined;
+            } else if (relatedFrame) {
+                const label = filteredLine.match(labelRe);
+                if (label?.groups) {
+                    lineObj.tag = {...relatedFrame, text: label.groups.label, severity: 1};
+                    relatedFrame = undefined;
+                }
             }
 
             const fixes = quickfixes.flatMap(({re, makeFix}) => {

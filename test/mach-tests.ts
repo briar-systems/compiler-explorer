@@ -433,15 +433,15 @@ describe('Mach diagnostics', () => {
         expect(severities('help: try this')).toEqual(1);
     });
 
-    it('marks a related frame at its location, but loses the label that explains it', () => {
-        // the marker text is the gutter bar the `-->` line follows, and `previous definition here` never reaches the
-        // editor at all: briar-systems/compiler-explorer#14
-        expect(marks('related').map(m => [m.line, m.text])).toEqual([
-            [6, 'error: duplicate definition: `dup` is already bound in this scope'],
-            [6, ''],
-            [5, '  |'],
-            [5, ''],
+    it('marks a related frame with the label that explains it', () => {
+        expect(marks('related').map(m => [m.line, m.text, m.severity])).toEqual([
+            [6, 'error: duplicate definition: `dup` is already bound in this scope', 3],
+            [6, '', 3],
+            [5, '', 3],
+            [5, 'previous definition here', 1],
         ]);
+        // the gutter bar the related frame follows is output, never a marker
+        expect(marks('related').map(m => m.text)).not.toContain('  |');
         expect(texts('related')).toContain('  |     --- previous definition here');
     });
 });
