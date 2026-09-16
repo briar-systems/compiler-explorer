@@ -136,7 +136,7 @@ function _parseOutputLine(line: string, inputFilename?: string, pathPrefix?: str
 
 function parseSeverity(message: string): number {
     if (message.startsWith('warning')) return 2;
-    if (message.startsWith('note')) return 1;
+    if (message.startsWith('note') || message.startsWith('info') || message.startsWith('help')) return 1;
     return 3;
 }
 

@@ -409,19 +409,28 @@ describe('Mach diagnostics', () => {
         expect(marks('fail')).toEqual([]);
     });
 
-    it('sinks an info or a help headline to an error marker', () => {
-        // the renderer's severity catalog has four headlines; CE reads severity off the headline text and knows only
-        // `warning` and `note`, so `info:` and `help:` arrive as errors: briar-systems/compiler-explorer#15. No
-        // caller in the compiler emits either at 5.1.0, so this is the renderer's contract, not a capture.
-        const headlines = ['info: a remark', 'help: try this'];
-        const rendered = headlines
-            .map(h => `${h}\n --> ${inputFilename}:3:1\n  |\n3 | ret 0;\n  | ^^^^^^\n`)
-            .join('\n');
-        const marks = compiler
-            .processExecutionResult({code: 0, stdout: '', stderr: rendered} as any, inputFilename)
-            .stderr.filter(line => line.tag)
-            .map(line => line.tag!.severity);
-        expect(marks).toEqual([3, 3, 3, 3]);
+    it('marks each headline of the severity catalog at its own severity', () => {
+        // the catalog has four headlines. No caller in the compiler emits `info:` or `help:` at 5.1.0, so these two
+        // are rendered the way `severity_label` writes them rather than captured from a build.
+        const severities = (headline: string) =>
+            compiler
+                .processExecutionResult(
+                    {
+                        code: 0,
+                        stdout: '',
+                        stderr: `${headline}\n --> ${inputFilename}:3:1\n  |\n3 | ret 0;\n  | ^^^^^^\n`,
+                    } as any,
+                    inputFilename,
+                )
+                .stderr.filter(line => line.tag)
+                // the headline's marker carries the severity; the location line's own is always an error, as upstream
+                // leaves its text empty so it never shows
+                .map(line => line.tag!.severity)[0];
+
+        expect(severities('error: it broke')).toEqual(3);
+        expect(severities('warning: it creaks')).toEqual(2);
+        expect(severities('info: a remark')).toEqual(1);
+        expect(severities('help: try this')).toEqual(1);
     });
 
     it('marks a related frame at its location, but loses the label that explains it', () => {
