@@ -22,6 +22,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import {beforeAll, describe, expect, it, vi} from 'vitest';
@@ -35,12 +36,46 @@ const languages = {
     mach: {id: 'mach' as LanguageKey, extensions: ['.mach']},
 };
 
+// `mach info targets` as mach 5.0.4 prints it.
 const infoTargets = `linux-x86_64          isa=x86_64    os=linux         abi=sysv64   object=elf
+linux-aarch64         isa=aarch64   os=linux         abi=aapcs64  object=elf
 linux-riscv64         isa=rv64gc    os=linux         abi=lp64     object=elf
+linux-riscv64         isa=rv64gc    os=linux         abi=lp64f    object=elf
 linux-riscv64         isa=rv64gc    os=linux         abi=lp64d    object=elf
+darwin-x86_64         isa=x86_64    os=darwin        abi=sysv64   object=macho
+darwin-aarch64        isa=aarch64   os=darwin        abi=aapcs64  object=macho
+windows-x86_64        isa=x86_64    os=windows       abi=win64    object=coff
 freestanding-x86_64   isa=x86_64    os=freestanding  abi=sysv64   object=elf
 freestanding-x86_64   isa=x86_64    os=freestanding  abi=sysv64   object=raw
+freestanding-x86_64   isa=x86_64    os=freestanding  abi=win64    object=elf
+freestanding-x86_64   isa=x86_64    os=freestanding  abi=win64    object=raw
+freestanding-aarch64  isa=aarch64   os=freestanding  abi=aapcs64  object=elf
+freestanding-aarch64  isa=aarch64   os=freestanding  abi=aapcs64  object=raw
+freestanding-riscv64  isa=rv64gc    os=freestanding  abi=lp64     object=elf
+freestanding-riscv64  isa=rv64gc    os=freestanding  abi=lp64     object=raw
+freestanding-riscv64  isa=rv64gc    os=freestanding  abi=lp64f    object=elf
+freestanding-riscv64  isa=rv64gc    os=freestanding  abi=lp64f    object=raw
+freestanding-riscv64  isa=rv64gc    os=freestanding  abi=lp64d    object=elf
+freestanding-riscv64  isa=rv64gc    os=freestanding  abi=lp64d    object=raw
+freestanding-riscv32  isa=rv32imac  os=freestanding  abi=ilp32    object=elf
+freestanding-riscv32  isa=rv32imac  os=freestanding  abi=ilp32    object=raw
+freestanding-spirv    isa=spirv     os=freestanding  abi=spirv    object=spv
 `;
+
+// the formats that registered a debug model in mach 5.0.4; every other one refused the adapter's debug profile
+const debugCapableFormats = new Set(['elf', 'macho']);
+
+/** Stands in for a probe build, answering from the object format the probe manifest selected. */
+async function fakeProbe(root: string) {
+    const manifest = await fs.readFile(path.join(root, 'mach.toml'), 'utf8');
+    const of = manifest.match(/^of = "(\S+)"$/m)?.[1];
+    if (of && debugCapableFormats.has(of)) return {code: 0, stdout: '', stderr: ''};
+    return {
+        code: 2,
+        stdout: '',
+        stderr: 'error: debug info was requested, but this target registers no debug model',
+    };
+}
 
 describe('Mach project layout', () => {
     let ce: CompilationEnvironment;
@@ -57,24 +92,46 @@ describe('Mach project layout', () => {
             stdout: infoTargets,
             stderr: '',
         } as any);
+        vi.spyOn(compiler, 'exec').mockImplementation(async (_exe, args) => (await fakeProbe(args[1])) as any);
     });
 
-    it('names one target per tuple, qualified by abi only where a platform has several', async () => {
+    it('offers only the tuples that build under the profile, named by the dimensions that disambiguate them', async () => {
         expect((await compiler.targets()).map(t => t.name)).toEqual([
             'linux-x86_64',
+            'linux-aarch64',
             'linux-riscv64-lp64',
+            'linux-riscv64-lp64f',
             'linux-riscv64-lp64d',
-            'freestanding-x86_64',
+            'darwin-x86_64',
+            'darwin-aarch64',
+            'freestanding-x86_64-sysv64',
+            'freestanding-x86_64-win64',
+            'freestanding-aarch64',
+            'freestanding-riscv64-lp64',
+            'freestanding-riscv64-lp64f',
+            'freestanding-riscv64-lp64d',
+            'freestanding-riscv32',
         ]);
     });
 
-    it('declares every target, the source entry and the bundled std as a path dependency', async () => {
+    it('probes every tuple `mach info targets` reports, each under its own object format', async () => {
+        await compiler.targets();
+        expect((await compiler.supportedTuples()).length).toEqual(23);
+        expect((compiler.exec as any).mock.calls.length).toEqual(23);
+    });
+
+    it('declares every offered target with its object format, the source entry and the bundled std', async () => {
         const manifest = compiler.manifest(await compiler.targets());
-        expect(manifest).toContain('[target.linux-riscv64-lp64d]\nisa = "rv64gc"\nos = "linux"\nabi = "lp64d"\n');
-        expect(manifest).toContain('[artifact.example]\nkind = "bin"\nentry = "example.mach"\n');
         expect(manifest).toContain(
-            'targets = ["linux-x86_64", "linux-riscv64-lp64", "linux-riscv64-lp64d", "freestanding-x86_64"]',
+            '[target.linux-riscv64-lp64d]\nisa = "rv64gc"\nos = "linux"\nabi = "lp64d"\nof = "elf"\n',
         );
+        // freestanding defaults to the flat image, which carries no debug model and no linkable object
+        expect(manifest).toContain(
+            '[target.freestanding-x86_64-sysv64]\nisa = "x86_64"\nos = "freestanding"\nabi = "sysv64"\nof = "elf"\n',
+        );
+        expect(manifest).toContain('[artifact.example]\nkind = "bin"\nentry = "example.mach"\n');
+        expect(manifest).not.toContain('windows-x86_64');
+        expect(manifest).not.toContain('freestanding-spirv');
         expect(manifest).toContain('[dep.std]\npath = "/opt/compiler-explorer/mach-5.0.4/std"\n');
     });
 

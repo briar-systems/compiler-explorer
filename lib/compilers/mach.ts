@@ -37,6 +37,7 @@ import type {BasicExecutionResult, UnprocessedExecResult} from '../../types/exec
 import type {ParseFiltersAndOutputOptions} from '../../types/features/filters.interfaces.js';
 import {BaseCompiler} from '../base-compiler.js';
 import {CompilationEnvironment} from '../compilation-env.js';
+import * as temp from '../temp.js';
 import * as utils from '../utils.js';
 import {MachParser} from './argument-parsers.js';
 
@@ -46,13 +47,57 @@ export type MachTarget = {
     isa: string;
     os: string;
     abi: string;
+    object: string;
 };
+
+/**
+ * The profile every compilation builds under. A target that cannot be resolved against it produces no view at all, so
+ * the same lines drive the probe that decides which targets are worth offering.
+ */
+const profile = [
+    '[profile.ce]',
+    'default = true',
+    'opt = 0',
+    'debug = true',
+    'simd = "scalarize"',
+    'vectorize = true',
+    'float_reassoc = false',
+    '',
+];
+
+/**
+ * Each tuple names its object format explicitly. Omitting it takes the os's default, which for freestanding is the
+ * flat image: it carries neither a debug model nor linkable objects, so the ELF row of the same tuple never gets a
+ * chance to be the one that builds.
+ */
+function targetSection(target: MachTarget): string[] {
+    return [
+        `[target.${target.name}]`,
+        `isa = "${target.isa}"`,
+        `os = "${target.os}"`,
+        `abi = "${target.abi}"`,
+        `of = "${target.object}"`,
+        '',
+    ];
+}
+
+/** A platform name shared by several tuples is qualified by abi, then by object format, until every key is unique. */
+function qualifyNames(rows: MachTarget[]): MachTarget[] {
+    return rows.map(row => {
+        const samePlatform = rows.filter(other => other.name === row.name);
+        if (samePlatform.length === 1) return row;
+        const name = `${row.name}-${row.abi}`;
+        return samePlatform.filter(other => other.abi === row.abi).length === 1
+            ? {...row, name}
+            : {...row, name: `${name}-${row.object}`};
+    });
+}
 
 /**
  * Mach has no single-file mode: every build is a project with a manifest and a realized dependency closure (std
  * included). Each compilation therefore lays out a project in the temp dir:
  *
- *   mach.toml               generated; one bin artifact, every supported target, std as a path dependency
+ *   mach.toml               generated; one bin artifact, every buildable target, std as a path dependency
  *   src/example.mach        the user's source (and any extra files, rooted at src/)
  *   dep/std/                realized by `mach dep pull` from the std installed beside the compiler, or `stdPath`
  *   out/obj/example/*.o     per-module objects, disassembled with objdump against their DWARF line table
@@ -65,6 +110,8 @@ export class MachCompiler extends BaseCompiler {
     }
 
     private readonly stdPath: string;
+    /** The probe runs once per compiler: every compilation needs the same answer to write its manifest. */
+    private buildable?: Promise<MachTarget[]>;
 
     constructor(info: PreliminaryCompilerInfo, env: CompilationEnvironment) {
         super(info, env);
@@ -88,46 +135,82 @@ export class MachCompiler extends BaseCompiler {
         return path.dirname(path.dirname(inputFilename));
     }
 
-    /** Every (isa, os, abi) tuple from `mach info targets`, named after mach's own platform name. */
-    async targets(): Promise<MachTarget[]> {
+    /** Every (isa, os, abi, object) tuple `mach info targets` reports, named after mach's own platform name. */
+    async supportedTuples(): Promise<MachTarget[]> {
         const result = await this.execCompilerCached(this.compiler.exe, ['info', 'targets']);
         if (result.code !== 0) throw new Error(`mach info targets failed: ${result.stderr}`);
 
         const rows: MachTarget[] = [];
         for (const line of utils.splitLines(result.stdout)) {
-            const match = line.match(/^(\S+)\s+isa=(\S+)\s+os=(\S+)\s+abi=(\S+)\s+object=\S+/);
+            const match = line.match(/^(\S+)\s+isa=(\S+)\s+os=(\S+)\s+abi=(\S+)\s+object=(\S+)/);
             if (!match) continue;
-            const [, name, isa, os, abi] = match;
-            // raw and elf variants of one tuple are the same target to a manifest
-            if (!rows.some(r => r.name === name && r.abi === abi)) rows.push({name, isa, os, abi});
+            const [, name, isa, os, abi, object] = match;
+            rows.push({name, isa, os, abi, object});
         }
-        // a platform name with several abis is qualified by the abi so every key stays unique
-        return rows.map(r =>
-            rows.filter(other => other.name === r.name).length > 1 ? {...r, name: `${r.name}-${r.abi}`} : r,
+        return rows;
+    }
+
+    /**
+     * The tuples this compiler can actually produce a view for, probed rather than listed: the profile above asks for
+     * debug information, and a tuple whose object format registers no debug model fails before it emits anything. A
+     * format that gains one starts being offered on its own, with no change here.
+     */
+    async targets(): Promise<MachTarget[]> {
+        this.buildable ??= this.probeTargets();
+        return await this.buildable;
+    }
+
+    private async probeTargets(): Promise<MachTarget[]> {
+        const dirPath = await this.newTempDir({hold: true});
+        try {
+            const rows: MachTarget[] = [];
+            for (const target of await this.supportedTuples()) {
+                if (await this.buildsUnderProfile(dirPath, target)) rows.push(target);
+            }
+            return qualifyNames(rows);
+        } finally {
+            temp.release(dirPath);
+            await fs.rm(dirPath, {recursive: true, force: true});
+        }
+    }
+
+    /** Compile a throwaway module for one tuple, the way a compilation does, to see whether the tuple survives it. */
+    private async buildsUnderProfile(dirPath: string, target: MachTarget): Promise<boolean> {
+        const root = path.join(dirPath, `${target.name}-${target.abi}-${target.object}`);
+        await fs.mkdir(path.join(root, 'src'), {recursive: true});
+        await fs.writeFile(path.join(root, 'src', 'probe.mach'), 'pub fun probe() i64 {\n    ret 0;\n}\n');
+        await fs.writeFile(
+            path.join(root, 'mach.toml'),
+            [
+                '[project]',
+                'id = "probe"',
+                'version = "0.0.0"',
+                'src = "src"',
+                'out = "out"',
+                '',
+                ...profile,
+                ...targetSection(target),
+                '[artifact.probe]',
+                'kind = "bin"',
+                'entry = "probe.mach"',
+                'out = "bin/probe"',
+                `targets = ["${target.name}"]`,
+                'link = []',
+                'need = []',
+                '',
+            ].join('\n'),
         );
+        const result = await this.exec(this.compiler.exe, ['build', root, '--emit', 'obj'], {
+            ...this.getDefaultExecOptions(),
+            customCwd: root,
+        });
+        return result.code === 0;
     }
 
     manifest(targets: MachTarget[]): string {
         const id = this.projectId;
-        const lines = [
-            '[project]',
-            `id = "${id}"`,
-            'version = "0.0.0"',
-            'src = "src"',
-            'out = "out"',
-            '',
-            '[profile.ce]',
-            'default = true',
-            'opt = 0',
-            'debug = true',
-            'simd = "scalarize"',
-            'vectorize = true',
-            'float_reassoc = false',
-            '',
-        ];
-        for (const t of targets) {
-            lines.push(`[target.${t.name}]`, `isa = "${t.isa}"`, `os = "${t.os}"`, `abi = "${t.abi}"`, '');
-        }
+        const lines = ['[project]', `id = "${id}"`, 'version = "0.0.0"', 'src = "src"', 'out = "out"', '', ...profile];
+        for (const t of targets) lines.push(...targetSection(t));
         lines.push(
             `[artifact.${id}]`,
             'kind = "bin"',
