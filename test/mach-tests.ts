@@ -186,6 +186,17 @@ describe('Mach project layout', () => {
         );
     });
 
+    it('offers the Mach IR pane only where the readable listing exists', () => {
+        const env = makeCompilationEnvironment({languages});
+        const at = (semver: string) =>
+            new MachCompiler(makeFakeCompilerInfo({id: 'mach', exe: '/usr/bin/mach', lang: 'mach', semver}), env)
+                .compiler.supportsMachIrView;
+        // 5.0.4 is still offered beside 5.1.0, and its `--emit-ir` writes only the dump: briar-systems/mach#3440
+        expect(at('5.0.4')).toBe(false);
+        expect(at('5.1.0')).toBe(true);
+        expect(at('5.2.1')).toBe(true);
+    });
+
     it('takes std from stdPath when a compiler names one', () => {
         const env = makeCompilationEnvironment({languages, props: {'compiler.machdev.stdPath': '/src/mach/dep/std'}});
         const dev = new MachCompiler(makeFakeCompilerInfo({id: 'machdev', exe: '/usr/bin/mach', lang: 'mach'}), env);

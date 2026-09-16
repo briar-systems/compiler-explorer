@@ -692,7 +692,7 @@ const definitions: Record<LanguageKey, LanguageDefinition> = {
         alias: [],
         logoFilename: 'mach.svg',
         logoFilenameDark: null,
-        formatter: null,
+        formatter: 'machfmt',
         previewFilter: null,
         monacoDisassembly: null,
         digitSeparator: '_',
