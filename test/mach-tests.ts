@@ -31,8 +31,9 @@ import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest
 
 import {CompilationEnvironment} from '../lib/compilation-env.js';
 import {MachCompiler} from '../lib/compilers/mach.js';
+import {AsmParser} from '../lib/parsers/asm-parser.js';
 import {LanguageKey} from '../types/languages.interfaces.js';
-import {makeCompilationEnvironment, makeFakeCompilerInfo} from './utils.js';
+import {makeCompilationEnvironment, makeFakeCompilerInfo, makeFakeParseFiltersAndOutputOptions} from './utils.js';
 
 const languages = {
     mach: {id: 'mach' as LanguageKey, extensions: ['.mach']},
@@ -343,5 +344,40 @@ describe('Mach diagnostics', () => {
             [5, ''],
         ]);
         expect(texts('related')).toContain('  |     --- previous definition here');
+    });
+});
+/**
+ * Under the production sandbox the compile directory is bind-mounted at `/app`, so the project root the adapter
+ * passes to `mach build` is `/app` and the DWARF comp_dir it records is `/app` too. The capture below is a real
+ * objdump of an object built with the project root at `/app`.
+ */
+describe('Mach asm with an /app project root', () => {
+    it('attributes an /app source line to the editor', () => {
+        const objdump = readFileSync(path.join(__dirname, 'mach', 'app-objdump.asm'), 'utf8');
+        const parsed = new AsmParser().process(
+            objdump,
+            makeFakeParseFiltersAndOutputOptions({binaryObject: true, directives: true}),
+        );
+
+        expect(parsed.asm.filter(line => line.source).map(line => line.source)).toContainEqual({
+            file: null,
+            line: 9,
+            mainsource: true,
+        });
+        expect(parsed.asm.map(line => line.text)).toContain('main:');
+    });
+
+    it('strips the /app root when filenames are not masked', () => {
+        const objdump = readFileSync(path.join(__dirname, 'mach', 'app-objdump.asm'), 'utf8');
+        const parsed = new AsmParser().process(
+            objdump,
+            makeFakeParseFiltersAndOutputOptions({binaryObject: true, directives: true, dontMaskFilenames: true}),
+        );
+
+        expect(parsed.asm.filter(line => line.source).map(line => line.source)).toContainEqual({
+            file: 'src/example.mach',
+            line: 9,
+            mainsource: true,
+        });
     });
 });
