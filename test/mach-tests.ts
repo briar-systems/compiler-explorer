@@ -227,6 +227,15 @@ describe('Mach project layout', () => {
         await expect(bare.targets()).rejects.toThrow('set compiler.machbare.stdPath');
     });
 
+    it('asks for the IR dump only when the Mach IR pane wants it, and reads it from out/ir', () => {
+        const root = path.join('/tmp', 'ce');
+        expect(compiler.optionsForBackend({}, '')).toEqual([]);
+        expect(compiler.optionsForBackend({produceMachIr: true}, '')).toEqual(['--emit-ir']);
+        expect(compiler.getMachIrOutputFilename(path.join(root, 'src', 'example.mach'))).toEqual(
+            path.join(root, 'out', 'ir', 'example', 'example.ir'),
+        );
+    });
+
     it('takes std from stdPath when a compiler names one', () => {
         const env = makeCompilationEnvironment({languages, props: {'compiler.machdev.stdPath': '/src/mach/dep/std'}});
         const dev = new MachCompiler(makeFakeCompilerInfo({id: 'machdev', exe: '/usr/bin/mach', lang: 'mach'}), env);

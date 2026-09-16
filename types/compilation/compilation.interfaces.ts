@@ -129,6 +129,7 @@ export type CompilationRequestOptions = {
         produceHaskellCore?: boolean;
         produceHaskellStg?: boolean;
         produceHaskellCmm?: boolean;
+        produceMachIr?: boolean;
         produceLeanC?: LeanCOptions | null;
         produceClojureMacroExp?: boolean;
         produceYul?: YulBackendOptions | null;
@@ -229,6 +230,7 @@ export type CompilationResult = {
     haskellCoreOutput?: ResultLine[];
     haskellStgOutput?: ResultLine[];
     haskellCmmOutput?: ResultLine[];
+    machIrOutput?: ResultLine[];
     leanCOutput?: ResultLine[];
 
     clojureMacroExpOutput?: ResultLine[];
