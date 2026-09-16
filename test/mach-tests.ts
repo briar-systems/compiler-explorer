@@ -392,16 +392,19 @@ describe('Mach diagnostics', () => {
         ]);
     });
 
-    it('names a second file by its basename, which is all CE gives the editor to match on', () => {
-        // the file is written at src/util/fmt.mach, so a tree pane holding it as `util/fmt.mach` will not match:
-        // briar-systems/compiler-explorer#13
-        expect(marks('second-file')[0]).toMatchObject({file: 'fmt.mach', line: 2, column: 9});
+    it('names a second file by the path the project knows it by', () => {
+        // the file is written at src/util/fmt.mach, and src is the root CE's extra files are rooted at, so the name
+        // the editor gets is the tree's own `util/fmt.mach`
+        expect(marks('second-file')[0]).toMatchObject({file: 'util/fmt.mach', line: 2, column: 9});
     });
 
-    it('names the std file a diagnostic came from', () => {
-        // naming it is as far as the adapter goes: without a tree pane the editor applies the marker anyway, so this
-        // still lands on the user's line 193: briar-systems/compiler-explorer#16
-        expect(marks('std')[0]).toMatchObject({file: 'derive.mach', line: 193, column: 5, severity: 3});
+    it('names a std file from outside the source root, so it matches no file of the project', () => {
+        expect(marks('std')[0]).toMatchObject({
+            file: '../dep/std/src/derive.mach',
+            line: 193,
+            column: 5,
+            severity: 3,
+        });
     });
 
     it('marks nothing for a failure that carries no location', () => {
@@ -409,30 +412,39 @@ describe('Mach diagnostics', () => {
         expect(marks('fail')).toEqual([]);
     });
 
-    it('sinks an info or a help headline to an error marker', () => {
-        // the renderer's severity catalog has four headlines; CE reads severity off the headline text and knows only
-        // `warning` and `note`, so `info:` and `help:` arrive as errors: briar-systems/compiler-explorer#15. No
-        // caller in the compiler emits either at 5.1.0, so this is the renderer's contract, not a capture.
-        const headlines = ['info: a remark', 'help: try this'];
-        const rendered = headlines
-            .map(h => `${h}\n --> ${inputFilename}:3:1\n  |\n3 | ret 0;\n  | ^^^^^^\n`)
-            .join('\n');
-        const marks = compiler
-            .processExecutionResult({code: 0, stdout: '', stderr: rendered} as any, inputFilename)
-            .stderr.filter(line => line.tag)
-            .map(line => line.tag!.severity);
-        expect(marks).toEqual([3, 3, 3, 3]);
+    it('marks each headline of the severity catalog at its own severity', () => {
+        // the catalog has four headlines. No caller in the compiler emits `info:` or `help:` at 5.1.0, so these two
+        // are rendered the way `severity_label` writes them rather than captured from a build.
+        const severities = (headline: string) =>
+            compiler
+                .processExecutionResult(
+                    {
+                        code: 0,
+                        stdout: '',
+                        stderr: `${headline}\n --> ${inputFilename}:3:1\n  |\n3 | ret 0;\n  | ^^^^^^\n`,
+                    } as any,
+                    inputFilename,
+                )
+                .stderr.filter(line => line.tag)
+                // the headline's marker carries the severity; the location line's own is always an error, as upstream
+                // leaves its text empty so it never shows
+                .map(line => line.tag!.severity)[0];
+
+        expect(severities('error: it broke')).toEqual(3);
+        expect(severities('warning: it creaks')).toEqual(2);
+        expect(severities('info: a remark')).toEqual(1);
+        expect(severities('help: try this')).toEqual(1);
     });
 
-    it('marks a related frame at its location, but loses the label that explains it', () => {
-        // the marker text is the gutter bar the `-->` line follows, and `previous definition here` never reaches the
-        // editor at all: briar-systems/compiler-explorer#14
-        expect(marks('related').map(m => [m.line, m.text])).toEqual([
-            [6, 'error: duplicate definition: `dup` is already bound in this scope'],
-            [6, ''],
-            [5, '  |'],
-            [5, ''],
+    it('marks a related frame with the label that explains it', () => {
+        expect(marks('related').map(m => [m.line, m.text, m.severity])).toEqual([
+            [6, 'error: duplicate definition: `dup` is already bound in this scope', 3],
+            [6, '', 3],
+            [5, '', 3],
+            [5, 'previous definition here', 1],
         ]);
+        // the gutter bar the related frame follows is output, never a marker
+        expect(marks('related').map(m => m.text)).not.toContain('  |');
         expect(texts('related')).toContain('  |     --- previous definition here');
     });
 });

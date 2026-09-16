@@ -37,7 +37,7 @@ import type {ParsedAsmResultLine} from '../types/asmresult/asmresult.interfaces.
 import type {CacheableValue} from '../types/cache.interfaces.js';
 import {BasicExecutionResult, UnprocessedExecResult} from '../types/execution/execution.interfaces.js';
 import {LanguageKey} from '../types/languages.interfaces.js';
-import type {Fix, ResultLine} from '../types/resultline/resultline.interfaces.js';
+import type {Fix, ResultLine, ResultLineTag} from '../types/resultline/resultline.interfaces.js';
 
 export {ce_temp_prefix, maskRootdirKeepingAppPrefix} from '../shared/common-utils.js';
 
@@ -136,7 +136,7 @@ function _parseOutputLine(line: string, inputFilename?: string, pathPrefix?: str
 
 function parseSeverity(message: string): number {
     if (message.startsWith('warning')) return 2;
-    if (message.startsWith('note')) return 1;
+    if (message.startsWith('note') || message.startsWith('info') || message.startsWith('help')) return 1;
     return 3;
 }
 
@@ -246,8 +246,18 @@ export function parseOutput(
     return result;
 }
 
+/**
+ * The name the editor knows a diagnostic's file by: the path relative to the directory the compilation's sources were
+ * written to, which is the name a tree pane gives that file. A file outside that directory, a library the build pulled
+ * in, keeps the distance in its name, so it matches no file of the project and marks no editor.
+ */
+function diagnosticFile(filename: string, inputFilename?: string): string | undefined {
+    if (!inputFilename) return filename === '<source>' ? undefined : filename;
+    if (filename === '<source>') return path.basename(inputFilename);
+    return path.relative(path.dirname(inputFilename), filename);
+}
+
 export function parseRustOutput(lines: string, inputFilename?: string, pathPrefix?: string) {
-    const inputBasename = inputFilename ? path.basename(inputFilename) : undefined;
     const quickfixes: {re: RegExp; makeFix: (match: string[]) => Fix}[] = [
         {
             re: / *help: add `#!\[feature\((.*?)\)]`/,
@@ -282,8 +292,13 @@ export function parseRustOutput(lines: string, inputFilename?: string, pathPrefi
     ];
 
     const re = /^\s+-->\s+(?<filename>.*):(?<line>\d+):(?<column>\d+)/;
+    // the gutter bar a related frame's `-->` follows: furniture, never the headline of a diagnostic
+    const gutterRe = /^\s*\|\s*$/;
+    // the underline under a frame's source line, and the label that explains it: `  |     --- previous definition here`
+    const labelRe = /^\s*\|\s*[\^~+-]+\s+(?<label>\S.*?)\s*$/;
     const result: ResultLine[] = [];
     let currentDiagnostic: ResultLine | undefined;
+    let relatedFrame: ResultLineTag | undefined;
     eachLine(lines, line => {
         line = _parseOutputLine(line, inputFilename, pathPrefix);
         if (line !== null) {
@@ -292,22 +307,28 @@ export function parseRustOutput(lines: string, inputFilename?: string, pathPrefi
             const match = filteredLine.match(re);
 
             if (match?.groups) {
-                const file =
-                    match.groups.filename === '<source>' ? inputBasename : path.basename(match.groups.filename);
+                const file = diagnosticFile(match.groups.filename, inputFilename);
                 const line = Number.parseInt(match.groups.line, 10);
                 const column = Number.parseInt(match.groups.column, 10);
 
-                currentDiagnostic = result.pop();
-                if (currentDiagnostic !== undefined) {
-                    const text = filterEscapeSequences(currentDiagnostic.text);
-                    currentDiagnostic.tag = {
+                const previous = result[result.length - 1];
+                // a frame whose `-->` follows a gutter bar is a related location of the diagnostic above it: it has no
+                // headline of its own, and its text is the label on its underline instead
+                const headline =
+                    previous !== undefined && !gutterRe.test(filterEscapeSequences(previous.text))
+                        ? result.pop()
+                        : undefined;
+                if (headline !== undefined) {
+                    currentDiagnostic = headline;
+                    const text = filterEscapeSequences(headline.text);
+                    headline.tag = {
                         file,
                         line,
                         column,
                         text,
                         severity: parseSeverity(text),
                     };
-                    result.push(currentDiagnostic);
+                    result.push(headline);
                 }
 
                 lineObj.tag = {
@@ -317,6 +338,13 @@ export function parseRustOutput(lines: string, inputFilename?: string, pathPrefi
                     text: '', // Left empty so that it does not show up in the editor
                     severity: 3,
                 };
+                relatedFrame = headline === undefined ? lineObj.tag : undefined;
+            } else if (relatedFrame) {
+                const label = filteredLine.match(labelRe);
+                if (label?.groups) {
+                    lineObj.tag = {...relatedFrame, text: label.groups.label, severity: 1};
+                    relatedFrame = undefined;
+                }
             }
 
             const fixes = quickfixes.flatMap(({re, makeFix}) => {
