@@ -24,6 +24,7 @@
 
 import GoldenLayout from 'golden-layout';
 
+import {ParsedAsmResultLine} from '../types/asmresult/asmresult.interfaces.js';
 import {ConfiguredOverrides} from '../types/compilation/compiler-overrides.interfaces.js';
 import {ConfiguredRuntimeTools} from '../types/execution/execution.interfaces.js';
 import {CompilerOutputOptions} from '../types/features/filters.interfaces.js';
@@ -312,7 +313,7 @@ export type PopulatedLeanCViewState = StateWithId & {
 export type EmptyMachIrViewState = EmptyState;
 export type PopulatedMachIrViewState = StateWithId & {
     source: string;
-    machIrOutput: ResultLine[];
+    machIrOutput: ParsedAsmResultLine[];
     compilerName: string;
     editorid: number;
     treeid: number;

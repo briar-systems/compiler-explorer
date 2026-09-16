@@ -24,6 +24,7 @@
 
 import GoldenLayout from 'golden-layout';
 
+import {ParsedAsmResultLine} from '../types/asmresult/asmresult.interfaces.js';
 import {GccDumpOutput} from '../types/compilation/compilation.interfaces.js';
 import {ConfiguredOverrides} from '../types/compilation/compiler-overrides.interfaces.js';
 import {ConfiguredRuntimeTools} from '../types/execution/execution.interfaces.js';
@@ -864,7 +865,7 @@ export function getMachIrView(): ComponentConfig<typeof MACH_IR_VIEW_COMPONENT_N
 export function getMachIrViewWith(
     id: number,
     source: string,
-    machIrOutput: ResultLine[] | undefined,
+    machIrOutput: ParsedAsmResultLine[] | undefined,
     compilerName: string,
     editorid: number,
     treeid: number,

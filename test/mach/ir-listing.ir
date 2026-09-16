@@ -1,0 +1,65 @@
+ir-listing stage="post-codegen" target="linux-x86_64" isa="x86_64" os="linux" abi="sysv64" of="elf"
+module example.example {
+  val @example.example.LANES: i64 = 4
+
+  fun @example.example.mask(~%p0: i64) i64 [pub oblivious] { ; /tmp/compiler-explorer-compiler-mach/src/example.mach
+    bb0:
+      dbg_value ~%p0                                ; 7:9
+      %4 = xor.secret.pure i64 ~%p0, 6148914691236517205 ; 8:9
+      ret ~%4                                       ; 8:5
+    unattached:
+      %0 = alloca i64 1                             ; 7:9
+      store.secret ~%p0, %0                         ; 7:9
+      %3 = load.secret i64 %0                       ; 8:9
+  }
+
+  fun @example.example.main() i64 [pub] {           ; /tmp/compiler-explorer-compiler-mach/src/example.mach
+    bb0:
+      br bb1
+    bb1 [preds=bb0]:
+      dbg_value 4                                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      dbg_value 9                                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      br bb2                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:5
+    bb2 [preds=bb1]:
+      br bb3                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:18
+    bb3 [preds=bb2]:
+      dbg_value 4                                   ; 12:5
+      br bb4
+    bb4 [preds=bb3]:
+      dbg_value 4                                   ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:2:9
+      br bb5                                        ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:3:5
+    bb5 [preds=bb4]:
+      dbg_value 9                                   ; 13:5
+      ret 9                                         ; 14:5
+    unattached:
+      %0 = alloca i64 1                             ; 12:5
+      %1 = call i64 @std.math.min, 4, 9             ; 12:20
+      store 4, %0                                   ; 12:5
+      %4 = load i64 %0                              ; 13:11
+      %5 = load i64 %0                              ; 13:29
+      %6 = call i64 @example.helper.bump, 4         ; 13:17
+      %7 = add.pure i64 4, 5                        ; 13:11
+      store 9, %0                                   ; 13:5
+      %10 = load i64 %0                             ; 14:9
+      %12 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      store 4, %12                                  ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      %15 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      store 9, %15                                  ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      %18 = load i64 %12                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:9
+      %19 = load i64 %15                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:13
+      %20 = cmp_lt_s.pure i8 4, 9                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:9
+      %22 = load i64 %12                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:22
+      br bb4                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:5
+      %25 = load i64 %15                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:17:9
+      br bb5                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:17:5
+      %28 = phi.pure i64 [bb2: 4]
+      %29 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:2:9
+      store 4, %29                                  ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:2:9
+      %32 = load i64 %29                            ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:3:9
+      %33 = add.pure i64 4, 1                       ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:3:9
+  }
+
+  fun @std.math.min(i64, i64) i64 [extern]
+
+  fun @example.helper.bump(i64) i64 [extern]
+}

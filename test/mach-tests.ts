@@ -32,6 +32,8 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {MachCompiler} from '../lib/compilers/mach.js';
 import {AsmParser} from '../lib/parsers/asm-parser.js';
 import {parseProperties} from '../lib/properties.js';
+import {MachIrParser} from '../lib/parsers/mach-ir.js';
+import {unwrap} from '../shared/assert.js';
 import {LanguageKey} from '../types/languages.interfaces.js';
 import {makeCompilationEnvironment, makeFakeCompilerInfo, makeFakeParseFiltersAndOutputOptions} from './utils.js';
 
@@ -230,7 +232,8 @@ describe('Mach project layout', () => {
     it('asks for the IR dump only when the Mach IR pane wants it, and reads it from out/ir', () => {
         const root = path.join('/tmp', 'ce');
         expect(compiler.optionsForBackend({}, '')).toEqual([]);
-        expect(compiler.optionsForBackend({produceMachIr: true}, '')).toEqual(['--emit-ir']);
+        // the bare flag is the ir-debug dump, whose text is not a contract; the pane reads the listing
+        expect(compiler.optionsForBackend({produceMachIr: true}, '')).toEqual(['--emit-ir=listing']);
         expect(compiler.getMachIrOutputFilename(path.join(root, 'src', 'example.mach'))).toEqual(
             path.join(root, 'out', 'ir', 'example', 'example.ir'),
         );
@@ -549,5 +552,119 @@ describe('Mach binary asm', () => {
             makeFakeParseFiltersAndOutputOptions({binary: true, directives: true}),
         );
         expect(parsed.asm.map(line => line.text).filter(text => text.endsWith(':'))).toEqual(['main:']);
+    });
+});
+
+/**
+ * `--emit-ir=listing`, captured from the project the adapter lays out: `src/example.mach` is the user's editor,
+ * `src/helper.mach` is a second file CE gave the compilation, and `dep/std` is the std the pull realized. The temp
+ * directory is rewritten to a stable path, as the diagnostics captures are.
+ *
+ *   src/example.mach                          src/helper.mach
+ *   1  use math: std.math;                    1  #[inline]
+ *   2  use helper: example.helper;            2  pub fun bump(x: i64) i64 {
+ *   3                                         3      ret x + 1;
+ *   4  val LANES: i64 = 4;                    4  }
+ *   5
+ *   6  #[oblivious]
+ *   7  pub fun mask(k: ^u64) ^u64 {
+ *   8      ret k ^ 0x5555555555555555;
+ *   9  }
+ *   10
+ *   11 pub fun main() i64 {
+ *   12     var acc: i64 = math.min(LANES, 9);
+ *   13     acc = acc + helper.bump(acc);
+ *   14     ret acc;
+ *   15 }
+ *
+ * `min` and `bump` are both inlined at -O2, so `main` holds instructions from three files at once.
+ */
+describe('Mach IR listing', () => {
+    const listing = readFileSync(path.join(__dirname, 'mach', 'ir-listing.ir'), 'utf8');
+    const parsed = new MachIrParser('src/example.mach').process(listing);
+
+    function at(text: string) {
+        return unwrap(parsed.find(line => line.text.includes(text)));
+    }
+
+    it('keeps every line of the listing, in order', () => {
+        expect(parsed.map(line => line.text)).toHaveLength(listing.split('\n').length - 1);
+        expect(parsed[0].text).toEqual(
+            'ir-listing stage="post-codegen" target="linux-x86_64" isa="x86_64" os="linux" abi="sysv64" of="elf"',
+        );
+        expect(parsed.at(-1)!.text).toEqual('}');
+    });
+
+    it('resolves a bare position against the file the function header names', () => {
+        // the header names src/example.mach, so `8:9` is the user's line 8, column 9
+        expect(at('xor.secret.pure').source).toEqual({file: null, line: 8, column: 9, mainsource: true});
+        expect(at('ret ~%4').source).toEqual({file: null, line: 8, column: 5, mainsource: true});
+    });
+
+    it("names the user's own source in the header, and marks it as the editor's", () => {
+        expect(at('fun @example.example.mask').text).toEqual(
+            '  fun @example.example.mask(~%p0: i64) i64 [pub oblivious] { ; <source>',
+        );
+    });
+
+    it('keeps a position in another file of the project off the editor', () => {
+        // helper.mach line 2 is not the user's line 2: briar-systems/compiler-explorer#16 is this bug elsewhere
+        const inlined = at('%29 = alloca');
+        expect(inlined.text).toEqual('      %29 = alloca i64 1                            ; src/helper.mach:2:9');
+        expect(inlined.source).toEqual({file: 'src/helper.mach', line: 2, column: 9});
+    });
+
+    it('keeps a position in std off the editor too', () => {
+        const fromStd = at('%20 = cmp_lt_s.pure');
+        expect(fromStd.source).toEqual({file: 'dep/std/src/math.mach', line: 16, column: 9});
+    });
+
+    it('maps nothing for an instruction that carries no position', () => {
+        expect(at('%28 = phi.pure').source).toBeUndefined();
+        expect(parsed.filter(line => line.text.trimEnd().endsWith('br bb1')).map(line => line.source)).toEqual([
+            undefined,
+        ]);
+    });
+
+    it("maps nothing for the listing's own structure", () => {
+        expect(at('module example.example').source).toBeUndefined();
+        expect(at('val @example.example.LANES').source).toBeUndefined();
+        expect(at('unattached:').source).toBeUndefined();
+        expect(at('bb1 [preds=bb0]').source).toBeUndefined();
+        // an extern declaration has no body, so it names no file and never moves the header the block below reads
+        expect(at('fun @std.math.min').text).toEqual('  fun @std.math.min(i64, i64) i64 [extern]');
+    });
+
+    it('maps the unattached block the same way as any other', () => {
+        // the instructions no block owns still carry real positions, and the pane shows them where the compiler put them
+        expect(at('%10 = load i64 %0').source).toEqual({file: null, line: 14, column: 9, mainsource: true});
+        expect(at('%18 = load i64 %12').source).toEqual({file: 'dep/std/src/math.mach', line: 16, column: 9});
+    });
+
+    it('resolves a bare position against nothing when the header could not name a file', () => {
+        // the file a header names is the function's alone: it must not carry into the next one, whose own header
+        // names no file because the compiler could not resolve one
+        const orphan = [
+            '  fun @m.named() i64 {                              ; src/example.mach',
+            '      ret 0                                         ; 3:5',
+            '  }',
+            '  fun @m.unnamed() i64 {',
+            '      ret 1                                         ; 4:5',
+            '  }',
+        ];
+        const rows = new MachIrParser('src/example.mach').process(orphan.join('\n') + '\n');
+        expect(rows[1].source).toEqual({file: null, line: 3, column: 5, mainsource: true});
+        expect(rows[4].source).toBeUndefined();
+    });
+
+    it('maps nothing for an offset the compiler could not resolve to a line', () => {
+        const unloaded = [
+            '  fun @m.f() i64 {                                ; src/example.mach',
+            '      ret 0                                         ; file#3@120',
+            '  }',
+        ];
+        const rows = new MachIrParser('src/example.mach').process(unloaded.join('\n') + '\n');
+        expect(rows[1].source).toBeUndefined();
+        expect(rows[1].text).toEqual('      ret 0                                         ; file#3@120');
     });
 });

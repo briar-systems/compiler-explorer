@@ -230,7 +230,7 @@ export type CompilationResult = {
     haskellCoreOutput?: ResultLine[];
     haskellStgOutput?: ResultLine[];
     haskellCmmOutput?: ResultLine[];
-    machIrOutput?: ResultLine[];
+    machIrOutput?: ParsedAsmResultLine[];
     leanCOutput?: ResultLine[];
 
     clojureMacroExpOutput?: ResultLine[];
