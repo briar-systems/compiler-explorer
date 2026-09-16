@@ -392,16 +392,19 @@ describe('Mach diagnostics', () => {
         ]);
     });
 
-    it('names a second file by its basename, which is all CE gives the editor to match on', () => {
-        // the file is written at src/util/fmt.mach, so a tree pane holding it as `util/fmt.mach` will not match:
-        // briar-systems/compiler-explorer#13
-        expect(marks('second-file')[0]).toMatchObject({file: 'fmt.mach', line: 2, column: 9});
+    it('names a second file by the path the project knows it by', () => {
+        // the file is written at src/util/fmt.mach, and src is the root CE's extra files are rooted at, so the name
+        // the editor gets is the tree's own `util/fmt.mach`
+        expect(marks('second-file')[0]).toMatchObject({file: 'util/fmt.mach', line: 2, column: 9});
     });
 
-    it('names the std file a diagnostic came from', () => {
-        // naming it is as far as the adapter goes: without a tree pane the editor applies the marker anyway, so this
-        // still lands on the user's line 193: briar-systems/compiler-explorer#16
-        expect(marks('std')[0]).toMatchObject({file: 'derive.mach', line: 193, column: 5, severity: 3});
+    it('names a std file from outside the source root, so it matches no file of the project', () => {
+        expect(marks('std')[0]).toMatchObject({
+            file: '../dep/std/src/derive.mach',
+            line: 193,
+            column: 5,
+            severity: 3,
+        });
     });
 
     it('marks nothing for a failure that carries no location', () => {

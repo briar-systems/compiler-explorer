@@ -432,6 +432,7 @@ describe('Rust compiler output', () => {
 
     it('attaches filenames to errors from multiple files', () => {
         // https://godbolt.org/z/nWE3PTeGf
+        // the compilation's files are written beside its main source, at /app, so that is what the names are relative to
         expect(
             utils.parseRustOutput(
                 `warning: function \`f1\` is never used
@@ -441,7 +442,7 @@ warning: function \`f2\` is never used
  --> /app/m.rs:1:4
 
 warning: 2 warnings emitted`,
-                'example.rs',
+                '/app/example.rs',
             ),
         ).toEqual([
             {
@@ -487,6 +488,28 @@ warning: 2 warnings emitted`,
             },
             {text: ''},
             {text: 'warning: 2 warnings emitted'},
+        ]);
+    });
+
+    it('names a file under the source root by its path there, and one outside it by its distance', () => {
+        // the name has to be the one the tree gives the file, or the editor holding it cannot be found; a library the
+        // build pulled in belongs to no editor, and a name reaching out of the root matches none
+        expect(
+            utils
+                .parseRustOutput(
+                    `error: unresolved identifier \`nope\`
+ --> /app/util/fmt.rs:2:9
+error: something is wrong in the library
+ --> /opt/lib/src/deep.rs:9:1`,
+                    '/app/example.rs',
+                )
+                .filter(line => line.tag)
+                .map(line => [line.tag?.file, line.tag?.line]),
+        ).toEqual([
+            ['util/fmt.rs', 2],
+            ['util/fmt.rs', 2],
+            ['../opt/lib/src/deep.rs', 9],
+            ['../opt/lib/src/deep.rs', 9],
         ]);
     });
 });

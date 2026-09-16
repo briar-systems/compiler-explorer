@@ -246,8 +246,18 @@ export function parseOutput(
     return result;
 }
 
+/**
+ * The name the editor knows a diagnostic's file by: the path relative to the directory the compilation's sources were
+ * written to, which is the name a tree pane gives that file. A file outside that directory, a library the build pulled
+ * in, keeps the distance in its name, so it matches no file of the project and marks no editor.
+ */
+function diagnosticFile(filename: string, inputFilename?: string): string | undefined {
+    if (!inputFilename) return filename === '<source>' ? undefined : filename;
+    if (filename === '<source>') return path.basename(inputFilename);
+    return path.relative(path.dirname(inputFilename), filename);
+}
+
 export function parseRustOutput(lines: string, inputFilename?: string, pathPrefix?: string) {
-    const inputBasename = inputFilename ? path.basename(inputFilename) : undefined;
     const quickfixes: {re: RegExp; makeFix: (match: string[]) => Fix}[] = [
         {
             re: / *help: add `#!\[feature\((.*?)\)]`/,
@@ -297,8 +307,7 @@ export function parseRustOutput(lines: string, inputFilename?: string, pathPrefi
             const match = filteredLine.match(re);
 
             if (match?.groups) {
-                const file =
-                    match.groups.filename === '<source>' ? inputBasename : path.basename(match.groups.filename);
+                const file = diagnosticFile(match.groups.filename, inputFilename);
                 const line = Number.parseInt(match.groups.line, 10);
                 const column = Number.parseInt(match.groups.column, 10);
 
