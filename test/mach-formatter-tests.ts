@@ -37,7 +37,7 @@ vi.mock('../lib/exec.js', () => ({execute: vi.fn()}));
 
 import * as exec from '../lib/exec.js';
 
-const machExe = '/opt/compiler-explorer/mach-5.1.0/mach';
+const machExe = '/opt/compiler-explorer/mach-5.4.0/mach';
 
 const unformatted = 'fun main()i32{ret 0;}';
 const canonical = 'fun main() i32 {\n    ret 0;\n}\n';
@@ -67,11 +67,11 @@ function execResult(code: number, stdout: string, stderr: string): UnprocessedEx
 }
 
 /**
- * Stands in for the mach v5.1.0 binary: `info` reports the version, `fmt -` writes the buffer's canonical layout to
+ * Stands in for the mach v5.4.0 binary: `info` reports the version, `fmt -` writes the buffer's canonical layout to
  * stdout, and a buffer that does not parse writes nothing to stdout, reports on stderr and exits non-zero.
  */
 function fakeMach(exe: string, args: string[], options: ExecutionOptions): Promise<UnprocessedExecResult> {
-    if (args[0] === 'info') return Promise.resolve(execResult(0, 'mach 5.1.0\nhost: linux-x86_64\n', ''));
+    if (args[0] === 'info') return Promise.resolve(execResult(0, 'mach 5.4.0\nhost: linux-x86_64\n', ''));
     if (options.input === malformed) return Promise.resolve(execResult(1, '', diagnostics));
     return Promise.resolve(execResult(0, canonical, ''));
 }
@@ -102,7 +102,7 @@ describe('Mach formatter', () => {
             exe: machExe,
             styles: [],
             type: 'machfmt',
-            version: 'mach 5.1.0',
+            version: 'mach 5.4.0',
         });
         const result = await formatter.format(unformatted, formatOptions);
         expect(vi.mocked(exec.execute)).toHaveBeenCalledWith(machExe, ['fmt', '-'], {input: unformatted});
@@ -116,7 +116,7 @@ describe('Mach formatter', () => {
             exe: machExe,
             styles: [],
             type: 'machfmt',
-            version: 'mach 5.1.0',
+            version: 'mach 5.4.0',
         });
         expect(formatter.isValidStyle('__DefaultStyle')).toBe(true);
         expect(formatter.isValidStyle('Google')).toBe(true);
@@ -128,7 +128,7 @@ describe('Mach formatter', () => {
         const formatter = service.getFormatterById('machfmt');
         expect(formatter).toBeInstanceOf(MachFmtFormatter);
         expect(vi.mocked(exec.execute)).toHaveBeenCalledWith(machExe, ['info'], {});
-        expect(formatter?.formatterInfo.version).toBe('mach 5.1.0');
+        expect(formatter?.formatterInfo.version).toBe('mach 5.4.0');
     });
 });
 
