@@ -46,6 +46,9 @@ import * as temp from '../temp.js';
 import * as utils from '../utils.js';
 import {MachParser} from './argument-parsers.js';
 
+/** The first release with `--emit-ir=listing`; before it the flag writes only the ir-debug dump (briar-systems/mach#3440). */
+const irListingVersion = '5.1.0';
+
 /** One platform tuple the compiler supports, keyed by the name a user passes to `--target`. */
 export type MachTarget = {
     name: string;
@@ -155,7 +158,9 @@ export class MachCompiler extends BaseCompiler {
             this.compilerProps<string>(`compiler.${this.compiler.id}.stdPath`) ??
             path.join(path.dirname(this.compiler.exe), 'std');
         this.compiler.supportsTarget = true;
-        this.compiler.supportsMachIrView = true;
+        // the pane's whole contract is a readable listing mapped to editor lines, which an older release cannot
+        // produce at all: offering it there would show the ir-debug dump and map nothing
+        this.compiler.supportsMachIrView = Semver.gte(utils.asSafeVer(this.compiler.semver), irListingVersion, true);
     }
 
     override getArgumentParserClass() {

@@ -31,8 +31,8 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 
 import {MachCompiler} from '../lib/compilers/mach.js';
 import {AsmParser} from '../lib/parsers/asm-parser.js';
-import {parseProperties} from '../lib/properties.js';
 import {MachIrParser} from '../lib/parsers/mach-ir.js';
+import {parseProperties} from '../lib/properties.js';
 import {unwrap} from '../shared/assert.js';
 import {LanguageKey} from '../types/languages.interfaces.js';
 import {makeCompilationEnvironment, makeFakeCompilerInfo, makeFakeParseFiltersAndOutputOptions} from './utils.js';
@@ -229,7 +229,7 @@ describe('Mach project layout', () => {
         await expect(bare.targets()).rejects.toThrow('set compiler.machbare.stdPath');
     });
 
-    it('asks for the IR dump only when the Mach IR pane wants it, and reads it from out/ir', () => {
+    it('asks for the IR listing only when the Mach IR pane wants it, and reads it from out/ir', () => {
         const root = path.join('/tmp', 'ce');
         expect(compiler.optionsForBackend({}, '')).toEqual([]);
         // the bare flag is the ir-debug dump, whose text is not a contract; the pane reads the listing
@@ -237,6 +237,17 @@ describe('Mach project layout', () => {
         expect(compiler.getMachIrOutputFilename(path.join(root, 'src', 'example.mach'))).toEqual(
             path.join(root, 'out', 'ir', 'example', 'example.ir'),
         );
+    });
+
+    it('offers the Mach IR pane only where the readable listing exists', () => {
+        const env = makeCompilationEnvironment({languages});
+        const at = (semver: string) =>
+            new MachCompiler(makeFakeCompilerInfo({id: 'mach', exe: '/usr/bin/mach', lang: 'mach', semver}), env)
+                .compiler.supportsMachIrView;
+        // 5.0.4 is still offered beside the newer releases, and its `--emit-ir` writes only the dump: briar-systems/mach#3440
+        expect(at('5.0.4')).toBe(false);
+        expect(at('5.1.0')).toBe(true);
+        expect(at('5.4.0')).toBe(true);
     });
 
     it('takes std from stdPath when a compiler names one', () => {
