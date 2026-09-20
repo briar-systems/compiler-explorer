@@ -40,6 +40,7 @@ import type {BasicExecutionResult, UnprocessedExecResult} from '../../types/exec
 import type {ParseFiltersAndOutputOptions} from '../../types/features/filters.interfaces.js';
 import {BaseCompiler} from '../base-compiler.js';
 import {CompilationEnvironment} from '../compilation-env.js';
+import {MachAsmParser} from '../parsers/asm-parser-mach.js';
 import {parseMachDiagnostics} from '../parsers/mach-diagnostics.js';
 import {MachIrParser} from '../parsers/mach-ir.js';
 import * as temp from '../temp.js';
@@ -75,6 +76,10 @@ const probeSource = [
 
 /** The first release that reads `[project].mach`; older releases refuse the key outright. */
 const compilerRangeVersion = '5.3.0';
+
+/** The project's source and output directories, as the generated manifest names them. */
+const sourceDir = 'src';
+const outDir = 'out';
 
 /**
  * The profile every compilation builds under. A target that cannot be resolved against it produces no view at all, so
@@ -158,6 +163,7 @@ export class MachCompiler extends BaseCompiler {
             this.compilerProps<string>(`compiler.${this.compiler.id}.stdPath`) ??
             path.join(path.dirname(this.compiler.exe), 'std');
         this.compiler.supportsTarget = true;
+        this.asm = new MachAsmParser(this.compilerProps, sourceDir);
         // the pane's whole contract is a readable listing mapped to editor lines, which an older release cannot
         // produce at all: offering it there would show the ir-debug dump and map nothing
         this.compiler.supportsMachIrView = Semver.gte(utils.asSafeVer(this.compiler.semver), irListingVersion, true);
@@ -228,8 +234,8 @@ export class MachCompiler extends BaseCompiler {
      * under are only settled once the unbuildable ones are gone.
      */
     private async layOutProbe(dirPath: string, tuples: MachTarget[]) {
-        await fs.mkdir(path.join(dirPath, 'src'), {recursive: true});
-        await fs.writeFile(path.join(dirPath, 'src', 'probe.mach'), probeSource);
+        await fs.mkdir(path.join(dirPath, sourceDir), {recursive: true});
+        await fs.writeFile(path.join(dirPath, sourceDir, 'probe.mach'), probeSource);
 
         const lines = [...this.projectSection('probe'), ...profile];
         for (const [index, target] of tuples.entries())
@@ -275,7 +281,7 @@ export class MachCompiler extends BaseCompiler {
         const version = Semver.parse(this.compiler.semver);
         if (version && Semver.gte(version, compilerRangeVersion))
             lines.push(`mach = "^${version.major}.${version.minor}"`);
-        lines.push('src = "src"', 'out = "out"', '');
+        lines.push(`src = "${sourceDir}"`, `out = "${outDir}"`, '');
         return lines;
     }
 
@@ -302,7 +308,7 @@ export class MachCompiler extends BaseCompiler {
     protected override async writeAllFiles(dirPath: string, source: string, files: FiledataPair[]) {
         if (!source) throw new Error(`File ${this.compileFilename} has no content or file is missing`);
 
-        const srcDir = path.join(dirPath, 'src');
+        const srcDir = path.join(dirPath, sourceDir);
         await fs.mkdir(srcDir, {recursive: true});
 
         const inputFilename = path.join(srcDir, this.compileFilename);
@@ -321,15 +327,37 @@ export class MachCompiler extends BaseCompiler {
         return {inputFilename};
     }
 
+    /** The entry module's object. Its siblings under the same directory are the project's other modules. */
     override getOutputFilename(dirPath: string, outputFilebase: string, key?: CacheKey | CompilationCacheKey) {
         if (this.isCacheKey(key) && key.filters?.binary)
             return this.getExecutableFilename(dirPath, outputFilebase, key);
         const id = this.projectId;
-        return path.join(dirPath, 'out', 'obj', id, `${id}.o`);
+        return path.join(dirPath, outDir, 'obj', id, `${id}.o`);
     }
 
     override getExecutableFilename(dirPath: string, outputFilebase: string, key?: CacheKey | CompilationCacheKey) {
-        return path.join(dirPath, 'out', 'bin', this.projectId);
+        return path.join(dirPath, outDir, 'bin', this.projectId);
+    }
+
+    /**
+     * Mach compiles one object per module, under `out/obj/<id>/` mirroring the source tree, so the asm view is the
+     * disassembly of every one of them: a function in a second source file is the user's code as much as the entry's.
+     * The entry comes first, the rest in path order; std's objects live under `out/obj/std/` and are not the user's.
+     */
+    override async getObjdumpInputFilenames(outputFilename: string, filters?: ParseFiltersAndOutputOptions) {
+        if (filters?.binary) return [outputFilename];
+        const objectDir = path.dirname(outputFilename);
+        let entries: string[];
+        try {
+            entries = (await fs.readdir(objectDir, {recursive: true})) as string[];
+        } catch {
+            return [outputFilename];
+        }
+        const others = entries
+            .map(entry => path.join(objectDir, entry))
+            .filter(file => file.endsWith('.o') && file !== outputFilename)
+            .sort();
+        return [outputFilename, ...others];
     }
 
     override optionsForBackend(backendOptions: Record<string, any>, outputFilename: string) {
@@ -347,12 +375,12 @@ export class MachCompiler extends BaseCompiler {
         if (output.code !== 0) return [{text: 'Failed to run compiler to get Mach IR'}];
         if (!(await utils.fileExists(outpath))) return [{text: 'Internal error; unable to open output path'}];
         const listing = await fs.readFile(outpath, 'utf8');
-        return new MachIrParser(path.posix.join('src', this.compileFilename)).process(listing);
+        return new MachIrParser(path.posix.join(sourceDir, this.compileFilename)).process(listing);
     }
 
     override getMachIrOutputFilename(inputFilename: string): string {
         const id = this.projectId;
-        return path.join(this.projectRoot(inputFilename), 'out', 'ir', id, `${id}.ir`);
+        return path.join(this.projectRoot(inputFilename), outDir, 'ir', id, `${id}.ir`);
     }
 
     override optionsForFilter(filters: ParseFiltersAndOutputOptions, outputFilename: string) {
