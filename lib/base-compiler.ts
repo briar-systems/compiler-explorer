@@ -666,6 +666,14 @@ export class BaseCompiler {
         return defaultOutputFilename;
     }
 
+    /** Every object the asm view disassembles, for a compilation that produces more than one. */
+    async getObjdumpInputFilenames(
+        defaultOutputFilename: string,
+        filters?: ParseFiltersAndOutputOptions,
+    ): Promise<string[]> {
+        return [this.getObjdumpInputFilename(defaultOutputFilename, filters)];
+    }
+
     postProcessObjdumpOutput(output: string) {
         return output;
     }
@@ -693,11 +701,13 @@ export class BaseCompiler {
         dynamicReloc: boolean,
         filters: ParseFiltersAndOutputOptions,
     ) {
-        const objdumpInputFile = this.getObjdumpInputFilename(outputFilename, filters);
+        const objectFiles = await this.getObjdumpInputFilenames(outputFilename, filters);
 
-        if (!(await utils.fileExists(objdumpInputFile))) {
-            result.asm = '<No output file ' + objdumpInputFile + '>';
-            return result;
+        for (const objectFile of objectFiles) {
+            if (!(await utils.fileExists(objectFile))) {
+                result.asm = '<No output file ' + objectFile + '>';
+                return result;
+            }
         }
 
         const objdumperInfo = this.getObjdumperForResult(result);
@@ -708,7 +718,7 @@ export class BaseCompiler {
 
         const objdumper = new objdumperInfo.cls();
         const args = objdumper.getArgs(
-            objdumpInputFile,
+            objectFiles,
             demangle,
             intelAsm,
             staticReloc,
@@ -728,7 +738,7 @@ export class BaseCompiler {
         } else {
             const execOptions: ExecutionOptions = {
                 maxOutput: maxSize,
-                customCwd: (result.dirPath as string) || path.dirname(objdumpInputFile),
+                customCwd: (result.dirPath as string) || path.dirname(objectFiles[0]),
             };
 
             const objResult = await objdumper.executeObjdump(

@@ -3,8 +3,10 @@
 [Mach](https://github.com/briar-systems/mach) builds projects, not single files. For each compilation, the adapter
 (`lib/compilers/mach.ts`) writes a small project into the temporary directory. The project has a generated
 `mach.toml`, the user's sources under `src/`, and std realized under `dep/std/` by `mach dep pull`. The adapter then
-runs `mach build` on the project root. The asm view is `objdump` run over the module's object file, and execution
-runs the linked binary.
+runs `mach build` on the project root. The asm view is `objdump` run over every object of the project, the entry
+module's first and the other modules' after it in path order, and execution runs the linked binary. A line from a
+second source file is attributed to that file, named by its path from `src/` as the tree pane names it, so only the
+entry's lines are the editor's.
 
 `mach dep pull` copies std into every compilation's project, which costs about 77 ms with std 5.3.0 (5.5 MB, 303
 files). That is by design: mach reads nothing outside the project root, so every dependency is realized under

@@ -31,6 +31,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 
 import {MachCompiler} from '../lib/compilers/mach.js';
 import {AsmParser} from '../lib/parsers/asm-parser.js';
+import {MachAsmParser} from '../lib/parsers/asm-parser-mach.js';
 import {MachIrParser} from '../lib/parsers/mach-ir.js';
 import {parseProperties} from '../lib/properties.js';
 import {unwrap} from '../shared/assert.js';
@@ -188,6 +189,40 @@ describe('Mach project layout', () => {
             path.join(root, 'out', 'obj', 'example', 'example.o'),
         );
         expect(compiler.getExecutableFilename(root, 'output')).toEqual(path.join(root, 'out', 'bin', 'example'));
+    });
+
+    it('disassembles every object of the project, the entry first and std left out', async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ce-mach-objects'));
+        try {
+            const entry = path.join(root, 'out', 'obj', 'example', 'example.o');
+            for (const file of [
+                entry,
+                path.join(root, 'out', 'obj', 'example', 'util', 'fmt.o'),
+                path.join(root, 'out', 'obj', 'example', 'other.o'),
+                path.join(root, 'out', 'obj', 'std', 'print.o'),
+            ]) {
+                await fs.mkdir(path.dirname(file), {recursive: true});
+                await fs.writeFile(file, '');
+            }
+            expect(await compiler.getObjdumpInputFilenames(entry, makeFakeParseFiltersAndOutputOptions({}))).toEqual([
+                entry,
+                path.join(root, 'out', 'obj', 'example', 'other.o'),
+                path.join(root, 'out', 'obj', 'example', 'util', 'fmt.o'),
+            ]);
+        } finally {
+            await fs.rm(root, {recursive: true, force: true});
+        }
+    });
+
+    it('disassembles the executable alone, and the entry alone when the build produced nothing', async () => {
+        const exe = path.join('/tmp', 'ce', 'out', 'bin', 'example');
+        expect(
+            await compiler.getObjdumpInputFilenames(exe, makeFakeParseFiltersAndOutputOptions({binary: true})),
+        ).toEqual([exe]);
+        const entry = path.join('/tmp', 'ce-mach-missing', 'out', 'obj', 'example', 'example.o');
+        expect(await compiler.getObjdumpInputFilenames(entry, makeFakeParseFiltersAndOutputOptions({}))).toEqual([
+            entry,
+        ]);
     });
 
     it('states the compiler range only to a compiler that reads it', () => {
@@ -553,6 +588,58 @@ describe('Mach asm with an /app project root', () => {
             line: 9,
             mainsource: true,
         });
+    });
+});
+
+/**
+ * `objdump -d -l` over both objects of a two-module project, the temp directory rewritten to `/app`:
+ *
+ *   src/example.mach                          src/util/fmt.mach
+ *   1  use print: std.print;                  1  pub fun twice(x: i64) i64 {
+ *   2  use fmt: example.util.fmt;             2      ret x * 2;
+ *   3                                         3  }
+ *   4  pub fun main() i64 {                   4
+ *   5      print.println("hi");               5  pub fun unused(x: i64) i64 {
+ *   6      ret fmt.twice(3);                  6      ret x + 7;
+ *   7  }                                      7  }
+ *
+ * Nothing is inlined at opt 0, so `twice` exists only in the second object, and `unused` is never called at all.
+ */
+describe('Mach asm from two modules', () => {
+    const objdump = readFileSync(path.join(__dirname, 'mach', 'two-module-objdump.asm'), 'utf8');
+    const parse = (filters: object) =>
+        new MachAsmParser(undefined, 'src').process(
+            objdump,
+            makeFakeParseFiltersAndOutputOptions({binaryObject: true, directives: true, ...filters}),
+        );
+    const sources = (parsed: {asm: {source?: unknown}[]}) =>
+        parsed.asm.filter(line => line.source).map(line => line.source);
+
+    it('shows every function of every module, the entry first', () => {
+        const labels = parse({})
+            .asm.map(line => line.text)
+            .filter(text => text.endsWith(':'));
+        expect(labels).toEqual(['example.example.main:', 'example.util.fmt.twice:', 'example.util.fmt.unused:']);
+    });
+
+    it('names a second file by the path the tree pane knows it by, and keeps it off the entry', () => {
+        const parsed = parse({dontMaskFilenames: true});
+        expect(sources(parsed)).toContainEqual({file: 'example.mach', line: 6, mainsource: true});
+        expect(sources(parsed)).toContainEqual({file: 'util/fmt.mach', line: 2, mainsource: false});
+        expect(sources(parsed)).not.toContainEqual(expect.objectContaining({file: 'src/util/fmt.mach'}));
+    });
+
+    it("marks only the entry as the editor's when filenames are masked", () => {
+        const parsed = parse({});
+        expect(sources(parsed)).toContainEqual({file: null, line: 4, mainsource: true});
+        expect(sources(parsed)).toContainEqual({file: 'util/fmt.mach', line: 6, mainsource: false});
+    });
+
+    it('keeps a second file under the library code filter, as code the user wrote', () => {
+        const labels = parse({libraryCode: true})
+            .asm.map(line => line.text)
+            .filter(text => text.endsWith(':'));
+        expect(labels).toContain('example.util.fmt.twice:');
     });
 });
 
