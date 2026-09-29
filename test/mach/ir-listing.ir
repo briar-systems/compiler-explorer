@@ -17,11 +17,11 @@ module example.example {
     bb0:
       br bb1
     bb1 [preds=bb0]:
-      dbg_value 4                                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
-      dbg_value 9                                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
-      br bb2                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:5
+      dbg_value 4                                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:14:9
+      dbg_value 9                                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:14:9
+      br bb2                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:5
     bb2 [preds=bb1]:
-      br bb3                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:18
+      br bb3                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:18
     bb3 [preds=bb2]:
       dbg_value 4                                   ; 12:5
       br bb4
@@ -41,17 +41,17 @@ module example.example {
       %7 = add.pure i64 4, 5                        ; 13:11
       store 9, %0                                   ; 13:5
       %10 = load i64 %0                             ; 14:9
-      %12 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
-      store 4, %12                                  ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
-      %15 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
-      store 9, %15                                  ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
-      %18 = load i64 %12                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:9
-      %19 = load i64 %15                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:13
-      %20 = cmp_lt_s.pure i8 4, 9                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:9
-      %22 = load i64 %12                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:22
-      br bb4                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:5
-      %25 = load i64 %15                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:17:9
-      br bb5                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:17:5
+      %12 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:14:9
+      store 4, %12                                  ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:14:9
+      %15 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:14:9
+      store 9, %15                                  ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:14:9
+      %18 = load i64 %12                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      %19 = load i64 %15                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:13
+      %20 = cmp_lt_s.pure i8 4, 9                   ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:9
+      %22 = load i64 %12                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:22
+      br bb4                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:15:5
+      %25 = load i64 %15                            ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:9
+      br bb5                                        ; /tmp/compiler-explorer-compiler-mach/dep/std/src/math.mach:16:5
       %28 = phi.pure i64 [bb2: 4]
       %29 = alloca i64 1                            ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:2:9
       store 4, %29                                  ; /tmp/compiler-explorer-compiler-mach/src/helper.mach:2:9

@@ -717,7 +717,7 @@ describe('Mach IR listing', () => {
 
     it('keeps a position in std off the editor too', () => {
         const fromStd = at('%20 = cmp_lt_s.pure');
-        expect(fromStd.source).toEqual({file: 'dep/std/src/math.mach', line: 16, column: 9});
+        expect(fromStd.source).toEqual({file: 'dep/std/src/math.mach', line: 15, column: 9});
     });
 
     it('maps nothing for an instruction that carries no position', () => {
@@ -739,7 +739,7 @@ describe('Mach IR listing', () => {
     it('maps the unattached block the same way as any other', () => {
         // the instructions no block owns still carry real positions, and the pane shows them where the compiler put them
         expect(at('%10 = load i64 %0').source).toEqual({file: null, line: 14, column: 9, mainsource: true});
-        expect(at('%18 = load i64 %12').source).toEqual({file: 'dep/std/src/math.mach', line: 16, column: 9});
+        expect(at('%18 = load i64 %12').source).toEqual({file: 'dep/std/src/math.mach', line: 15, column: 9});
     });
 
     it('resolves a bare position against nothing when the header could not name a file', () => {
