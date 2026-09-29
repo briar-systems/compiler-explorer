@@ -25,8 +25,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import Semver from 'semver';
-
 import type {ParsedAsmResultLine} from '../../types/asmresult/asmresult.interfaces.js';
 import type {
     CacheKey,
@@ -47,9 +45,6 @@ import {MachIrParser} from '../parsers/mach-ir.js';
 import * as temp from '../temp.js';
 import * as utils from '../utils.js';
 import {MachParser} from './argument-parsers.js';
-
-/** The first release with `--emit-ir=listing`; before it the flag writes only the ir-debug dump (briar-systems/mach#3440). */
-const irListingVersion = '5.1.0';
 
 /** One platform tuple the compiler supports, keyed by the name a user passes to `--target`. */
 export type MachTarget = {
@@ -169,9 +164,7 @@ export class MachCompiler extends BaseCompiler {
             path.join(path.dirname(this.compiler.exe), 'std');
         this.compiler.supportsTarget = true;
         this.asm = new MachAsmParser(this.compilerProps, sourceDir);
-        // the pane's whole contract is a readable listing mapped to editor lines, which an older release cannot
-        // produce at all: offering it there would show the ir-debug dump and map nothing
-        this.compiler.supportsMachIrView = Semver.gte(utils.asSafeVer(this.compiler.semver), irListingVersion, true);
+        this.compiler.supportsMachIrView = true;
     }
 
     override getArgumentParserClass() {
