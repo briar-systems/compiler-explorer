@@ -60,6 +60,9 @@ export class MachIr extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Mach
         if (state.machIrOutput) {
             this.showMachIrResults(state.machIrOutput);
         }
+        // announced only once built: the source editor answers requestSettings with colours synchronously
+        this.eventHub.emit('machIrViewOpened', this.compilerInfo.compilerId);
+        this.eventHub.emit('requestSettings');
     }
 
     override getInitialHTML(): string {
@@ -115,8 +118,6 @@ export class MachIr extends MonacoPane<monaco.editor.IStandaloneCodeEditor, Mach
 
         this.eventHub.on('colours', this.onColours, this);
         this.eventHub.on('panesLinkLine', this.onPanesLinkLine, this);
-        this.eventHub.emit('machIrViewOpened', this.compilerInfo.compilerId);
-        this.eventHub.emit('requestSettings');
     }
 
     override onCompileResult(compilerId: number, compiler: CompilerInfo, result: CompilationResult): void {

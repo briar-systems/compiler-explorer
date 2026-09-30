@@ -54,7 +54,7 @@ function pane(settings: Record<string, unknown> = {}) {
         compilerInfo: {compilerId: 1, editorId: 2, treeId: 0},
         editorDecorations: {set: vi.fn()},
         editor: {deltaDecorations: vi.fn().mockReturnValue([]), revealLinesInCenter: vi.fn()},
-        eventHub: {emit: vi.fn()},
+        eventHub: {emit: vi.fn(), on: vi.fn()},
         decorations: {},
         previousDecorations: [],
         settings,
@@ -63,6 +63,14 @@ function pane(settings: Record<string, unknown> = {}) {
 }
 
 describe('Mach IR pane', () => {
+    it('announces nothing while the base constructor registers its callbacks', () => {
+        // a synchronous reply to an emit from here would land before the pane's own fields are initialised
+        const view = pane();
+        Object.assign(view.editor, {onMouseMove: vi.fn(), onDidChangeCursorSelection: vi.fn()});
+        view.registerCallbacks();
+        expect(view.eventHub.emit).not.toHaveBeenCalled();
+    });
+
     it('colours only the lines whose position is in the editor', () => {
         const view = pane();
         // the editor's lines 12 and 14 are coloured; helper.mach line 2 and math.mach line 16 are not the editor's
