@@ -61,6 +61,7 @@ export class AsmParser extends AsmRegex implements IAsmParser {
 
     protected labelFindNonMips: RegExp;
     protected labelFindMips: RegExp;
+    protected numericLocalLabelRef: RegExp;
     protected mipsLabelDefinition: RegExp;
     protected dataDefn: RegExp;
     protected fileFind: RegExp;
@@ -350,6 +351,11 @@ export class AsmParser extends AsmRegex implements IAsmParser {
         this.labelFindNonMips = /[.A-Z_a-z][\w$.]*|"[.A-Z_a-z][\w$.]*"/g;
         // MIPS labels can start with a $ sign, but other assemblers use $ to mean literal.
         this.labelFindMips = /[$.A-Z_a-z][\w$.]*|"[$.A-Z_a-z][\w$.]*"/g;
+        // GNU as numeric local labels are defined as `1:` and referred to as `1f` (forwards) or
+        // `1b` (backwards). The finders above only match names that start with a letter, a dot or
+        // an underscore, so those references need a pattern of their own. The lookbehind keeps
+        // NEON element sizes out of it: the `16b` of `add v0.16b, v1.16b, v2.16b` is not a label.
+        this.numericLocalLabelRef = /(?<![\w.$])(\d+)[bf]\b/g;
         this.mipsLabelDefinition = /^\$[\w$.]+:/;
         this.dataDefn =
             /^\s*\.(ascii|asciz|base64|[1248]?byte|dc(?:\.[abdlswx])?|dcb(?:\.[bdlswx])?|ds(?:\.[bdlpswx])?|double|dword|fill|float|half|hword|int|long|octa|quad|short|single|skip|space|string(?:8|16|32|64)?|value|word|xword|zero)/;
@@ -394,9 +400,9 @@ export class AsmParser extends AsmRegex implements IAsmParser {
         this.relocationRe = /^\s*(?<address>[\da-f]+):\s*(?<relocname>(R_[\dA-Z_]+))\s*(?<relocdata>.*)/;
         this.relocDataSymNameRe = /^(?<symname>[^\d-+][\w.]*)?\s*(?<addend_or_value>.*)$/;
         if (process.platform === 'win32') {
-            this.lineRe = /^([A-Z]:\/[^:]+):(?<line>\d+).*/;
+            this.lineRe = /^(?:; )?([A-Z]:\/[^:]+):(?<line>\d+).*/;
         } else {
-            this.lineRe = /^(\/[^:]+):(?<line>\d+).*/;
+            this.lineRe = /^(?:; )?(\/[^:]+):(?<line>\d+).*/;
         }
 
         // labelRe is made very greedy as it's also used with demangled objdump output (eg. it can have c++ template with <>).
@@ -466,6 +472,7 @@ export class AsmParser extends AsmRegex implements IAsmParser {
             mipsLabelDefinition: this.mipsLabelDefinition,
             labelFindNonMips: this.labelFindNonMips,
             labelFindMips: this.labelFindMips,
+            numericLocalLabelRef: this.numericLocalLabelRef,
             startBlock: this.startBlock,
             endBlock: this.endBlock,
             fixLabelIndentation: this.fixLabelIndentation.bind(this),
@@ -670,12 +677,14 @@ export class AsmParser extends AsmRegex implements IAsmParser {
                         labels: labelsInLine,
                     });
                     labelDefinitions[func] = asm.length;
+                    // each function's label may be dropped again, not only the first after user code
+                    mayRemovePreviousLabel = true;
                     if (process.platform === 'win32') source = null;
                 }
                 continue;
             }
 
-            if (func && line === `${func}():`) continue;
+            if (func && (line === `${func}():` || line === `; ${func}():`)) continue;
 
             if (!func || !this.isUserFunction(func)) continue;
 
